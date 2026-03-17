@@ -11,67 +11,97 @@ using UnityMCP.Generators;
 namespace UnityMCP.UI
 {
     /// <summary>
-    /// AI 快捷命令窗口。
-    /// 支持三种模式：生成代码、生成预制体、联合生成（代码+预制体）。
+    /// 聊天消息角色
+    /// </summary>
+    public enum ChatRole
+    {
+        User,
+        Assistant
+    }
+
+    /// <summary>
+    /// 消息处理状态
+    /// </summary>
+    public enum MessageState
+    {
+        Generating,      // 正在生成
+        CodeGenerated,   // 代码已生成（联合模式第一步）
+        WaitingCompile,  // 等待编译（联合模式）
+        Success,         // 生成成功
+        Error            // 生成失败
+    }
+
+    /// <summary>
+    /// 生成模式
+    /// </summary>
+    public enum GenerateMode
+    {
+        Code = 0,
+        Prefab = 1,
+        Combined = 2
+    }
+
+    /// <summary>
+    /// 单条聊天消息的数据结构
+    /// </summary>
+    public class ChatMessage
+    {
+        public ChatRole Role;
+        public string Content = "";
+
+        // 仅助理消息使用的状态
+        public MessageState State = MessageState.Generating;
+        public GenerateMode Mode;
+        public CodeType CodeType;
+
+        // 生成结果数据
+        public string ErrorMessage = "";
+        
+        public string GeneratedCode = "";
+        public string ScriptName = "";
+        
+        public PrefabDescription? PrefabDescription;
+        public string PrefabName = "";
+        public string RawJson = "";
+        public List<string> PrefabWarnings = new();
+
+        public string SavedScriptPath = "";
+        public string SavedPrefabPath = "";
+
+        // 进度/耗时统计
+        public float GenerationTime;
+        public int TokensUsed;
+        public float CodeGenerationTime;
+        public int CodeTokensUsed;
+        
+        public bool IsCombinedPrefabPhase;
+        public int CompileWaitTicks;
+    }
+
+    /// <summary>
+    /// AI 快捷命令窗口（对话式 UI）。
     /// </summary>
     public class AIQuickCommand : EditorWindow
     {
-        private enum GenerateMode
-        {
-            Code = 0,
-            Prefab = 1,
-            Combined = 2
-        }
-
-        private enum State
-        {
-            Input,
-            Loading,
-            CodePreview,
-            PrefabPreview,
-            WaitingCompile,
-            Success,
-            Error
-        }
-
         private static readonly string[] MODE_LABELS = { "生成代码", "生成预制体", "联合生成" };
 
         #region Fields
 
-        private State _state = State.Input;
-        private GenerateMode _mode = GenerateMode.Code;
+        private GenerateMode _currentMode = GenerateMode.Code;
+        private CodeType _currentCodeType = CodeType.Auto;
         private string _userInput = "";
 
-        // D1/D2: 代码类型选择
-        private CodeType _codeType = CodeType.Auto;
-
-        // 代码生成
-        private string _generatedCode = "";
-        private string _scriptName = "";
-
-        // 预制体生成
-        private PrefabDescription? _prefabDescription;
-        private string _prefabName = "";
-        private string _rawJson = "";
-        private List<string> _prefabWarnings = new();
-
-        // D4: 联合生成状态
-        private bool _combinedPrefabPhase;
-        private string _savedScriptPath = "";
-
-        // 编译等待
-        private bool _compilationDetected;
-        private int _compileWaitTicks;
-
-        // 通用
-        private string _errorMessage = "";
-        private string _savedFilePath = "";
-        private float _generationTime;
-        private float _codeGenerationTime;
-        private int _tokensUsed;
-        private int _codeTokensUsed;
-        private Vector2 _scrollPos;
+        private List<ChatMessage> _chatHistory = new();
+        private Vector2 _chatScrollPos;
         private AIServiceConfig? _config;
+        
+        // 编译回调相关
+        private ChatMessage? _pendingCompileMessage;
+        private bool _compilationDetected;
+
+        // UI 样式缓存
+        private GUIStyle? _userBubbleStyle;
+        private GUIStyle? _assistantBubbleStyle;
 
         #endregion
 
@@ -83,7 +113,7 @@ namespace UnityMCP.UI
             var window = GetWindow<AIQuickCommand>(utility: true);
             window.titleContent = new GUIContent("AI 快捷生成");
             window.minSize = new Vector2(600, 500);
-            window.maxSize = new Vector2(900, 750);
+            window.maxSize = new Vector2(900, 800);
             window.ResetAll();
             window.ShowUtility();
             window.Focus();
@@ -92,6 +122,7 @@ namespace UnityMCP.UI
         private void OnEnable()
         {
             _config = AIServiceConfig.Load();
+            ResetAll();
         }
 
         private void OnDisable()
@@ -101,617 +132,483 @@ namespace UnityMCP.UI
 
         private void ResetAll()
         {
-            _state = State.Input;
             _userInput = "";
-            _generatedCode = "";
-            _scriptName = "";
-            _prefabDescription = null;
-            _prefabName = "";
-            _rawJson = "";
-            _prefabWarnings = new List<string>();
-            _combinedPrefabPhase = false;
-            _savedScriptPath = "";
+            _chatHistory.Clear();
+            _pendingCompileMessage = null;
             _compilationDetected = false;
-            _compileWaitTicks = 0;
-            _errorMessage = "";
-            _savedFilePath = "";
-            _codeGenerationTime = 0;
-            _codeTokensUsed = 0;
-            _scrollPos = Vector2.zero;
+            EditorApplication.update -= OnCompileWaitUpdate;
         }
 
         #endregion
 
-        #region OnGUI
+        #region UI 绘制
+
+        private void InitStyles()
+        {
+            if (_userBubbleStyle == null)
+            {
+                _userBubbleStyle = new GUIStyle(EditorStyles.helpBox)
+                {
+                    wordWrap = true,
+                    richText = true,
+                    fontSize = 13,
+                    padding = new RectOffset(10, 10, 10, 10),
+                    margin = new RectOffset(40, 10, 5, 5) // 靠右
+                };
+            }
+
+            if (_assistantBubbleStyle == null)
+            {
+                _assistantBubbleStyle = new GUIStyle(EditorStyles.helpBox)
+                {
+                    wordWrap = true,
+                    richText = true,
+                    fontSize = 13,
+                    padding = new RectOffset(10, 10, 10, 10),
+                    margin = new RectOffset(10, 40, 5, 5) // 靠左
+                };
+            }
+        }
 
         private void OnGUI()
         {
+            InitStyles();
+
+            EditorGUILayout.Space(5);
+            DrawToolbar();
             EditorGUILayout.Space(5);
 
-            switch (_state)
-            {
-                case State.Input:
-                    DrawInputUI();
-                    break;
-                case State.Loading:
-                    DrawLoadingUI();
-                    break;
-                case State.CodePreview:
-                    DrawCodePreviewUI();
-                    break;
-                case State.PrefabPreview:
-                    DrawPrefabPreviewUI();
-                    break;
-                case State.WaitingCompile:
-                    DrawWaitingCompileUI();
-                    break;
-                case State.Success:
-                    DrawSuccessUI();
-                    break;
-                case State.Error:
-                    DrawErrorUI();
-                    break;
-            }
+            DrawChatHistory();
+
+            EditorGUILayout.Space(5);
+            DrawInputArea();
         }
 
-        #endregion
-
-        #region 输入界面
-
-        private void DrawInputUI()
+        private void DrawToolbar()
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("生成模式", EditorStyles.boldLabel, GUILayout.Width(60));
-            _mode = (GenerateMode)GUILayout.Toolbar((int)_mode, MODE_LABELS, GUILayout.Height(25));
-            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            
+            EditorGUILayout.LabelField("模式:", GUILayout.Width(40));
+            _currentMode = (GenerateMode)EditorGUILayout.Popup((int)_currentMode, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(100));
 
-            EditorGUILayout.Space(8);
-
-            // D1/D2: 代码类型选择（代码模式和联合模式可用）
-            if (_mode == GenerateMode.Code || _mode == GenerateMode.Combined)
+            if (_currentMode == GenerateMode.Code || _currentMode == GenerateMode.Combined)
             {
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField("代码类型", GUILayout.Width(60));
-                _codeType = (CodeType)EditorGUILayout.Popup((int)_codeType, PromptBuilder.CodeTypeLabels);
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.Space(5);
+                EditorGUILayout.Space(10);
+                EditorGUILayout.LabelField("代码类型:", GUILayout.Width(60));
+                _currentCodeType = (CodeType)EditorGUILayout.Popup((int)_currentCodeType, PromptBuilder.CodeTypeLabels, EditorStyles.toolbarPopup, GUILayout.Width(120));
             }
 
-            switch (_mode)
-            {
-                case GenerateMode.Code:
-                    EditorGUILayout.LabelField("描述你需要的脚本", EditorStyles.boldLabel);
-                    EditorGUILayout.HelpBox(
-                        "示例：\n" +
-                        "• 创建一个 Player 脚本，包含 WASD 移动和空格跳跃\n" +
-                        "• 创建一个武器配置 ScriptableObject，包含攻击力和冷却时间\n" +
-                        "• 创建一个游戏管理器单例，管理游戏状态和分数",
-                        MessageType.None);
-                    break;
-
-                case GenerateMode.Prefab:
-                    EditorGUILayout.LabelField("描述你需要的预制体", EditorStyles.boldLabel);
-                    EditorGUILayout.HelpBox(
-                        "示例：\n" +
-                        "• 创建一个玩家预制体，包含 Rigidbody、CapsuleCollider 和 Animator\n" +
-                        "• 创建一个 UI 面板，包含标题文本和关闭按钮\n" +
-                        "• 创建一个敌人预制体，带有子对象 Model 和 HealthBar",
-                        MessageType.None);
-                    break;
-
-                case GenerateMode.Combined:
-                    EditorGUILayout.LabelField("描述你需要的功能（将同时生成代码和预制体）", EditorStyles.boldLabel);
-                    EditorGUILayout.HelpBox(
-                        "示例：\n" +
-                        "• 创建一个可拾取的道具，包含旋转脚本和带碰撞体的预制体\n" +
-                        "• 创建一个 NPC 对话系统，包含对话管理脚本和 UI 对话框预制体\n" +
-                        "• 创建一个血条 UI，包含生命值脚本和 Slider 预制体",
-                        MessageType.None);
-                    break;
-            }
-
-            EditorGUILayout.Space(5);
-
-            _userInput = EditorGUILayout.TextArea(_userInput, GUILayout.MinHeight(80));
-
-            EditorGUILayout.Space(10);
-
-            EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
 
-            GUI.enabled = !string.IsNullOrWhiteSpace(_userInput);
-
-            var buttonLabel = _mode switch
+            if (GUILayout.Button("清空历史", EditorStyles.toolbarButton, GUILayout.Width(70)))
             {
-                GenerateMode.Code => "生成代码",
-                GenerateMode.Prefab => "生成预制体",
-                GenerateMode.Combined => "开始生成",
-                _ => "生成"
-            };
-
-            if (GUILayout.Button(buttonLabel, GUILayout.Width(120), GUILayout.Height(30)))
-            {
-                StartGeneration();
+                ResetAll();
             }
 
-            if (Event.current.type == EventType.KeyDown
-                && Event.current.keyCode == KeyCode.Return
-                && Event.current.control
-                && !string.IsNullOrWhiteSpace(_userInput))
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawChatHistory()
+        {
+            _chatScrollPos = EditorGUILayout.BeginScrollView(_chatScrollPos, GUILayout.ExpandHeight(true));
+
+            if (_chatHistory.Count == 0)
             {
-                StartGeneration();
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.LabelField("在下方输入需求以开始生成", EditorStyles.centeredGreyMiniLabel);
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+                GUILayout.FlexibleSpace();
+            }
+            else
+            {
+                foreach (var msg in _chatHistory)
+                {
+                    if (msg.Role == ChatRole.User)
+                    {
+                        DrawUserMessage(msg);
+                    }
+                    else
+                    {
+                        DrawAssistantMessage(msg);
+                    }
+                    EditorGUILayout.Space(5);
+                }
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawUserMessage(ChatMessage msg)
+        {
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.BeginVertical(_userBubbleStyle!, GUILayout.MinWidth(100));
+            EditorGUILayout.LabelField($"<b>用户:</b>", _userBubbleStyle!);
+            EditorGUILayout.LabelField(msg.Content, _userBubbleStyle!);
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawAssistantMessage(ChatMessage msg)
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.BeginVertical(_assistantBubbleStyle!, GUILayout.MinWidth(200));
+            EditorGUILayout.LabelField($"<b>AI 助手:</b>", _assistantBubbleStyle!);
+
+            switch (msg.State)
+            {
+                case MessageState.Generating:
+                    DrawGeneratingState(msg);
+                    break;
+                case MessageState.CodeGenerated:
+                    DrawCodeGeneratedState(msg);
+                    break;
+                case MessageState.WaitingCompile:
+                    DrawWaitingCompileState(msg);
+                    break;
+                case MessageState.Success:
+                    DrawSuccessState(msg);
+                    break;
+                case MessageState.Error:
+                    DrawErrorState(msg);
+                    break;
+            }
+
+            EditorGUILayout.EndVertical();
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawInputArea()
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            // 快捷提示
+            string hint = _currentMode switch
+            {
+                GenerateMode.Code => "描述你需要的脚本，如：创建一个包含WASD移动的Player脚本",
+                GenerateMode.Prefab => "描述你需要的预制体，如：创建一个包含碰撞体的玩家预制体",
+                GenerateMode.Combined => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
+                _ => ""
+            };
+
+            GUI.SetNextControlName("ChatInput");
+            _userInput = EditorGUILayout.TextArea(_userInput, GUILayout.Height(60), GUILayout.ExpandWidth(true));
+
+            if (string.IsNullOrEmpty(_userInput))
+            {
+                var rect = GUILayoutUtility.GetLastRect();
+                rect.x += 4;
+                rect.y += 2;
+                GUI.Label(rect, hint, EditorStyles.centeredGreyMiniLabel);
+            }
+
+            bool canSend = !string.IsNullOrWhiteSpace(_userInput) && !IsAnyMessageGenerating();
+            GUI.enabled = canSend;
+
+            if (GUILayout.Button("发送\n(Ctrl+Enter)", GUILayout.Width(90), GUILayout.Height(60)))
+            {
+                SendMessage();
+            }
+
+            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return && Event.current.control && canSend)
+            {
+                SendMessage();
                 Event.current.Use();
             }
 
             GUI.enabled = true;
-
-            if (GUILayout.Button("取消", GUILayout.Width(80), GUILayout.Height(30)))
-            {
-                Close();
-            }
-
             EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(5);
-            EditorGUILayout.LabelField("提示: Ctrl+Enter 快速生成", EditorStyles.miniLabel);
         }
 
         #endregion
 
-        #region 加载界面
+        #region 消息状态绘制
 
-        private void DrawLoadingUI()
+        private void DrawGeneratingState(ChatMessage msg)
         {
-            GUILayout.FlexibleSpace();
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-
-            string loadingText;
-            if (_mode == GenerateMode.Combined)
-            {
-                loadingText = _combinedPrefabPhase
-                    ? "正在生成预制体，请稍候... (第 2 步)"
-                    : "正在生成代码，请稍候... (第 1 步)";
-            }
-            else
-            {
-                loadingText = _mode == GenerateMode.Code
-                    ? "正在生成代码，请稍候..."
-                    : "正在生成预制体，请稍候...";
-            }
-
-            EditorGUILayout.LabelField(loadingText, EditorStyles.boldLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(10);
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField($"模型: {_config?.GetEffectiveModel() ?? "未配置"}", EditorStyles.miniLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            GUILayout.FlexibleSpace();
+            string text = msg.Mode == GenerateMode.Combined
+                ? (msg.IsCombinedPrefabPhase ? "正在生成预制体，请稍候... (第 2 步)" : "正在生成代码，请稍候... (第 1 步)")
+                : (msg.Mode == GenerateMode.Code ? "正在生成代码，请稍候..." : "正在生成预制体，请稍候...");
+            
+            EditorGUILayout.LabelField($"⏳ {text}");
             Repaint();
         }
 
-        #endregion
-
-        #region 代码预览界面
-
-        private void DrawCodePreviewUI()
+        private void DrawCodeGeneratedState(ChatMessage msg)
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("代码生成结果", EditorStyles.boldLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField(
-                $"耗时: {_generationTime:F1}秒 | Token: {_tokensUsed}",
-                EditorStyles.miniLabel);
-            EditorGUILayout.EndHorizontal();
-
-            if (_mode == GenerateMode.Combined)
-            {
-                EditorGUILayout.HelpBox("联合生成 - 第 1 步：代码已生成，保存后将自动生成预制体", MessageType.Info);
-            }
-
+            EditorGUILayout.LabelField("✅ <b>第 1 步完成</b>: 代码已生成！", _assistantBubbleStyle!);
+            EditorGUILayout.LabelField($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
+            
             EditorGUILayout.Space(5);
-
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("脚本名称:", GUILayout.Width(70));
-            _scriptName = EditorGUILayout.TextField(_scriptName);
+            EditorGUILayout.LabelField("脚本名称:", GUILayout.Width(60));
+            msg.ScriptName = EditorGUILayout.TextField(msg.ScriptName);
             EditorGUILayout.LabelField(".cs", GUILayout.Width(25));
             EditorGUILayout.EndHorizontal();
 
-            var targetPath = ScriptGenerator.GetScriptPath(_scriptName);
-            EditorGUILayout.LabelField($"保存位置: {targetPath}", EditorStyles.miniLabel);
-
-            if (ScriptGenerator.ScriptExists(_scriptName))
+            if (ScriptGenerator.ScriptExists(msg.ScriptName))
             {
-                EditorGUILayout.HelpBox(
-                    $"文件 {_scriptName}.cs 已存在，保存将覆盖（会自动备份）",
-                    MessageType.Warning);
+                EditorGUILayout.HelpBox($"文件 {msg.ScriptName}.cs 已存在，保存将覆盖", MessageType.Warning);
             }
 
             EditorGUILayout.Space(5);
-            EditorGUILayout.LabelField("代码预览:");
-            _scrollPos = EditorGUILayout.BeginScrollView(
-                _scrollPos, EditorStyles.helpBox, GUILayout.ExpandHeight(true));
-            EditorGUILayout.TextArea(_generatedCode, GUILayout.ExpandHeight(true));
-            EditorGUILayout.EndScrollView();
-
-            EditorGUILayout.Space(10);
-
             EditorGUILayout.BeginHorizontal();
-
-            if (_mode == GenerateMode.Combined)
+            
+            if (GUILayout.Button("预览代码", GUILayout.Height(25)))
             {
-                if (GUILayout.Button("保存代码并生成预制体", GUILayout.Height(30)))
-                    SaveCodeAndContinueCombined();
-                if (GUILayout.Button("仅保存代码", GUILayout.Height(30)))
-                    SaveScript();
+                PreviewWindow.ShowWindow($"{msg.ScriptName}.cs 预览", msg.GeneratedCode);
             }
-            else
+            if (GUILayout.Button("保存并继续生成预制体", GUILayout.Height(25)))
             {
-                if (GUILayout.Button("创建文件", GUILayout.Height(30)))
-                    SaveScript();
+                SaveCodeAndContinueCombined(msg);
             }
-
-            if (GUILayout.Button("重新生成", GUILayout.Height(30)))
-                StartGeneration();
-            if (GUILayout.Button("取消", GUILayout.Height(30)))
-                ResetAll();
+            
             EditorGUILayout.EndHorizontal();
         }
 
-        #endregion
-
-        #region 预制体预览界面
-
-        private void DrawPrefabPreviewUI()
+        private void DrawWaitingCompileState(ChatMessage msg)
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("预制体生成结果", EditorStyles.boldLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField(
-                $"耗时: {_generationTime:F1}秒 | Token: {_tokensUsed}",
-                EditorStyles.miniLabel);
-            EditorGUILayout.EndHorizontal();
-
-            if (_mode == GenerateMode.Combined)
-            {
-                EditorGUILayout.HelpBox(
-                    $"联合生成 - 第 2 步：预制体已生成\n脚本已保存: {_savedScriptPath}",
-                    MessageType.Info);
-            }
-
+            EditorGUILayout.LabelField($"✓ 脚本已保存: {msg.SavedScriptPath}");
+            
+            var dots = new string('.', (msg.CompileWaitTicks / 10 % 4) + 1);
+            var waitSeconds = msg.CompileWaitTicks * 0.1f;
+            
+            EditorGUILayout.LabelField($"⟳ 等待 Unity 编译完成{dots} ({waitSeconds:F1}秒)");
+            
             EditorGUILayout.Space(5);
-
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("预制体名称:", GUILayout.Width(80));
-            _prefabName = EditorGUILayout.TextField(_prefabName);
-            EditorGUILayout.LabelField(".prefab", GUILayout.Width(50));
-            EditorGUILayout.EndHorizontal();
-
-            var prefabPath = PrefabGenerator.GetPrefabPath(_prefabName);
-            EditorGUILayout.LabelField($"保存位置: {prefabPath}", EditorStyles.miniLabel);
-
-            if (PrefabGenerator.PrefabExists(_prefabName))
+            if (GUILayout.Button("取消联合生成", GUILayout.Width(150), GUILayout.Height(25)))
             {
-                EditorGUILayout.HelpBox(
-                    $"预制体 {_prefabName}.prefab 已存在，保存将覆盖",
-                    MessageType.Warning);
-            }
-
-            EditorGUILayout.Space(5);
-
-            if (_prefabDescription != null)
-            {
-                EditorGUILayout.LabelField("预制体结构预览:");
-                _scrollPos = EditorGUILayout.BeginScrollView(
-                    _scrollPos, EditorStyles.helpBox, GUILayout.ExpandHeight(true));
-                DrawGameObjectTree(_prefabDescription.rootObject, 0);
-                EditorGUILayout.EndScrollView();
-            }
-
-            if (_prefabWarnings.Count > 0)
-            {
-                EditorGUILayout.Space(5);
-                foreach (var warning in _prefabWarnings)
-                {
-                    EditorGUILayout.HelpBox(warning, MessageType.Warning);
-                }
-            }
-
-            EditorGUILayout.Space(10);
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("创建预制体", GUILayout.Height(30)))
-                SavePrefab();
-            if (GUILayout.Button("重新生成", GUILayout.Height(30)))
-            {
-                if (_mode == GenerateMode.Combined)
-                    GenerateCombinedPrefab();
-                else
-                    StartGeneration();
-            }
-            if (GUILayout.Button("取消", GUILayout.Height(30)))
-                ResetAll();
-            EditorGUILayout.EndHorizontal();
-        }
-
-        private void DrawGameObjectTree(GameObjectDescription desc, int indent)
-        {
-            var prefix = new string(' ', indent * 4);
-            var activeIcon = desc.active ? "●" : "○";
-
-            EditorGUILayout.LabelField($"{prefix}{activeIcon} {desc.name}", EditorStyles.boldLabel);
-
-            if (desc.components.Count > 0)
-            {
-                foreach (var comp in desc.components)
-                {
-                    var propsText = comp.properties.Count > 0
-                        ? $" ({comp.properties.Count} 个属性)"
-                        : "";
-                    EditorGUILayout.LabelField(
-                        $"{prefix}    + {comp.type}{propsText}",
-                        EditorStyles.miniLabel);
-                }
-            }
-
-            foreach (var child in desc.children)
-            {
-                DrawGameObjectTree(child, indent + 1);
-            }
-        }
-
-        #endregion
-
-        #region 编译等待界面 (D4)
-
-        private void DrawWaitingCompileUI()
-        {
-            GUILayout.FlexibleSpace();
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField("联合生成 - 等待编译", EditorStyles.boldLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(15);
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField($"✓  脚本已保存: {_savedScriptPath}", EditorStyles.label);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(8);
-
-            var dots = new string('.', (_compileWaitTicks / 10 % 4) + 1);
-            var waitSeconds = _compileWaitTicks * 0.1f;
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField($"⟳  等待 Unity 编译完成{dots} ({waitSeconds:F1}秒)", EditorStyles.label);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(8);
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField("编译完成后将自动生成预制体", EditorStyles.miniLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            GUILayout.FlexibleSpace();
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("取消联合生成", GUILayout.Width(150), GUILayout.Height(28)))
-            {
+                msg.State = MessageState.Success;
                 EditorApplication.update -= OnCompileWaitUpdate;
-                _savedFilePath = _savedScriptPath;
-                _mode = GenerateMode.Code;
-                _state = State.Success;
-                Repaint();
+                _pendingCompileMessage = null;
             }
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(10);
+            Repaint();
         }
 
-        #endregion
-
-        #region 成功 / 错误界面
-
-        private void DrawSuccessUI()
+        private void DrawSuccessState(ChatMessage msg)
         {
-            GUILayout.FlexibleSpace();
-
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-
-            string successText;
-            if (_mode == GenerateMode.Combined && !string.IsNullOrEmpty(_savedScriptPath) && !string.IsNullOrEmpty(_savedFilePath))
-                successText = "脚本和预制体创建成功！";
-            else if (_mode == GenerateMode.Prefab || (_mode == GenerateMode.Combined && !string.IsNullOrEmpty(_savedFilePath)))
-                successText = "预制体创建成功！";
-            else
-                successText = "脚本创建成功！";
-
-            EditorGUILayout.LabelField($"✅ {successText}", EditorStyles.boldLabel);
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.Space(10);
-
-            // 联合模式：显示两个路径
-            if (_mode == GenerateMode.Combined && !string.IsNullOrEmpty(_savedScriptPath))
+            string text = msg.Mode == GenerateMode.Combined && !string.IsNullOrEmpty(msg.SavedPrefabPath) 
+                ? "联合生成完成！" 
+                : (msg.Mode == GenerateMode.Code ? "代码生成完成！" : "预制体生成完成！");
+                
+            EditorGUILayout.LabelField($"✅ <b>{text}</b>", _assistantBubbleStyle!);
+            
+            if (msg.Mode == GenerateMode.Combined && !string.IsNullOrEmpty(msg.SavedPrefabPath))
             {
-                EditorGUILayout.BeginHorizontal();
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.LabelField($"脚本: {_savedScriptPath}", EditorStyles.miniLabel);
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
-
-                if (!string.IsNullOrEmpty(_savedFilePath) && _savedFilePath != _savedScriptPath)
-                {
-                    EditorGUILayout.BeginHorizontal();
-                    GUILayout.FlexibleSpace();
-                    EditorGUILayout.LabelField($"预制体: {_savedFilePath}", EditorStyles.miniLabel);
-                    GUILayout.FlexibleSpace();
-                    EditorGUILayout.EndHorizontal();
-                }
-
-                if (_codeGenerationTime > 0)
-                {
-                    EditorGUILayout.Space(3);
-                    EditorGUILayout.BeginHorizontal();
-                    GUILayout.FlexibleSpace();
-                    EditorGUILayout.LabelField(
-                        $"代码耗时: {_codeGenerationTime:F1}秒 ({_codeTokensUsed} token) | 预制体耗时: {_generationTime:F1}秒 ({_tokensUsed} token)",
-                        EditorStyles.miniLabel);
-                    GUILayout.FlexibleSpace();
-                    EditorGUILayout.EndHorizontal();
-                }
+                EditorGUILayout.LabelField($"代码耗时: {msg.CodeGenerationTime:F1}秒 ({msg.CodeTokensUsed} token) | 预制体耗时: {msg.GenerationTime:F1}秒 ({msg.TokensUsed} token)", EditorStyles.miniLabel);
             }
             else
             {
-                EditorGUILayout.BeginHorizontal();
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.LabelField(_savedFilePath, EditorStyles.miniLabel);
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.LabelField($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
             }
 
-            if (_prefabWarnings.Count > 0)
+            EditorGUILayout.Space(5);
+
+            // 未保存状态 (仅生成了，还需要用户确认)
+            if (msg.Mode == GenerateMode.Code && string.IsNullOrEmpty(msg.SavedScriptPath))
             {
+                DrawUnsavedCodeActions(msg);
+            }
+            else if (msg.Mode == GenerateMode.Prefab && string.IsNullOrEmpty(msg.SavedPrefabPath))
+            {
+                DrawUnsavedPrefabActions(msg);
+            }
+            else if (msg.Mode == GenerateMode.Combined && string.IsNullOrEmpty(msg.SavedPrefabPath) && !string.IsNullOrEmpty(msg.SavedScriptPath))
+            {
+                // 联合模式下第二步预制体已生成但未保存
+                DrawUnsavedPrefabActions(msg);
+            }
+            else
+            {
+                // 已保存状态
+                if (!string.IsNullOrEmpty(msg.SavedScriptPath))
+                    EditorGUILayout.LabelField($"脚本: {msg.SavedScriptPath}", EditorStyles.miniLabel);
+                
+                if (!string.IsNullOrEmpty(msg.SavedPrefabPath))
+                    EditorGUILayout.LabelField($"预制体: {msg.SavedPrefabPath}", EditorStyles.miniLabel);
+
+                if (msg.PrefabWarnings.Count > 0)
+                {
+                    EditorGUILayout.Space(2);
+                    foreach (var w in msg.PrefabWarnings)
+                        EditorGUILayout.HelpBox(w, MessageType.Warning);
+                }
+
                 EditorGUILayout.Space(5);
-                foreach (var w in _prefabWarnings)
-                    EditorGUILayout.HelpBox(w, MessageType.Warning);
-            }
-
-            GUILayout.FlexibleSpace();
-
-            EditorGUILayout.BeginHorizontal();
-
-            if (_mode == GenerateMode.Combined && !string.IsNullOrEmpty(_savedScriptPath))
-            {
-                if (GUILayout.Button("打开脚本", GUILayout.Height(30)))
+                EditorGUILayout.BeginHorizontal();
+                
+                if (!string.IsNullOrEmpty(msg.SavedScriptPath) && GUILayout.Button("打开脚本", GUILayout.Height(25)))
                 {
-                    var asset = AssetDatabase.LoadAssetAtPath<MonoScript>(_savedScriptPath);
+                    var asset = AssetDatabase.LoadAssetAtPath<MonoScript>(msg.SavedScriptPath);
                     if (asset != null) AssetDatabase.OpenAsset(asset);
                 }
-            }
-
-            if ((_mode == GenerateMode.Code ||
-                 (_mode == GenerateMode.Combined && string.IsNullOrEmpty(_savedFilePath)))
-                && !string.IsNullOrEmpty(_savedFilePath))
-            {
-                if (GUILayout.Button("打开文件", GUILayout.Height(30)))
+                
+                if (!string.IsNullOrEmpty(msg.SavedPrefabPath) && GUILayout.Button("选中预制体", GUILayout.Height(25)))
                 {
-                    var asset = AssetDatabase.LoadAssetAtPath<MonoScript>(_savedFilePath);
-                    if (asset != null) AssetDatabase.OpenAsset(asset);
-                }
-            }
-
-            if (_mode == GenerateMode.Prefab ||
-                (_mode == GenerateMode.Combined && !string.IsNullOrEmpty(_savedFilePath) && _savedFilePath != _savedScriptPath))
-            {
-                if (GUILayout.Button("选中预制体", GUILayout.Height(30)))
-                {
-                    var asset = AssetDatabase.LoadAssetAtPath<GameObject>(_savedFilePath);
+                    var asset = AssetDatabase.LoadAssetAtPath<GameObject>(msg.SavedPrefabPath);
                     if (asset != null)
                     {
                         Selection.activeObject = asset;
                         EditorGUIUtility.PingObject(asset);
                     }
                 }
+                
+                EditorGUILayout.EndHorizontal();
             }
+        }
 
-            if (GUILayout.Button("继续生成", GUILayout.Height(30)))
-                ResetAll();
-            if (GUILayout.Button("关闭", GUILayout.Height(30)))
-                Close();
+        private void DrawUnsavedCodeActions(ChatMessage msg)
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("脚本名称:", GUILayout.Width(60));
+            msg.ScriptName = EditorGUILayout.TextField(msg.ScriptName);
+            EditorGUILayout.LabelField(".cs", GUILayout.Width(25));
+            EditorGUILayout.EndHorizontal();
+
+            if (ScriptGenerator.ScriptExists(msg.ScriptName))
+                EditorGUILayout.HelpBox($"文件 {msg.ScriptName}.cs 已存在，保存将覆盖", MessageType.Warning);
+
+            EditorGUILayout.Space(5);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("预览", GUILayout.Height(25)))
+            {
+                PreviewWindow.ShowWindow($"{msg.ScriptName}.cs 预览", msg.GeneratedCode);
+            }
+            if (GUILayout.Button("保存文件", GUILayout.Height(25)))
+            {
+                SaveScript(msg);
+            }
             EditorGUILayout.EndHorizontal();
         }
 
-        private void DrawErrorUI()
+        private void DrawUnsavedPrefabActions(ChatMessage msg)
         {
-            EditorGUILayout.LabelField("生成失败", EditorStyles.boldLabel);
-            EditorGUILayout.Space(5);
-
-            _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos, GUILayout.MaxHeight(300));
-            EditorGUILayout.HelpBox(_errorMessage, MessageType.Error);
-            EditorGUILayout.EndScrollView();
-
-            EditorGUILayout.Space(10);
-
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("重试", GUILayout.Height(30)))
-                _state = State.Input;
-            if (GUILayout.Button("打开设置", GUILayout.Height(30)))
-                SettingsWindow.ShowWindow();
-            if (GUILayout.Button("关闭", GUILayout.Height(30)))
-                Close();
+            EditorGUILayout.LabelField("预制体名称:", GUILayout.Width(70));
+            msg.PrefabName = EditorGUILayout.TextField(msg.PrefabName);
+            EditorGUILayout.LabelField(".prefab", GUILayout.Width(50));
             EditorGUILayout.EndHorizontal();
+
+            if (PrefabGenerator.PrefabExists(msg.PrefabName))
+                EditorGUILayout.HelpBox($"预制体 {msg.PrefabName}.prefab 已存在，保存将覆盖", MessageType.Warning);
+
+            EditorGUILayout.Space(5);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("预览 JSON", GUILayout.Height(25)))
+            {
+                PreviewWindow.ShowWindow($"{msg.PrefabName}.prefab JSON 预览", msg.RawJson);
+            }
+            if (GUILayout.Button("创建预制体", GUILayout.Height(25)))
+            {
+                SavePrefab(msg);
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawErrorState(ChatMessage msg)
+        {
+            EditorGUILayout.LabelField("❌ <b>生成失败</b>", _assistantBubbleStyle!);
+            EditorGUILayout.HelpBox(msg.ErrorMessage, MessageType.Error);
+            
+            EditorGUILayout.Space(5);
+            if (GUILayout.Button("重试", GUILayout.Width(80), GUILayout.Height(25)))
+            {
+                RetryMessage(msg);
+            }
         }
 
         #endregion
 
-        #region 核心生成逻辑
+        #region 聊天与生成逻辑
 
-        private void StartGeneration()
+        private bool IsAnyMessageGenerating()
         {
-            _combinedPrefabPhase = false;
+            foreach (var msg in _chatHistory)
+            {
+                if (msg.Role == ChatRole.Assistant && (msg.State == MessageState.Generating || msg.State == MessageState.WaitingCompile))
+                    return true;
+            }
+            return false;
+        }
 
-            switch (_mode)
+        private void SendMessage()
+        {
+            if (string.IsNullOrWhiteSpace(_userInput)) return;
+
+            var userMsg = new ChatMessage
+            {
+                Role = ChatRole.User,
+                Content = _userInput
+            };
+            _chatHistory.Add(userMsg);
+
+            var assistantMsg = new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Content = _userInput, // 保存输入以便重试
+                Mode = _currentMode,
+                CodeType = _currentCodeType,
+                State = MessageState.Generating
+            };
+            _chatHistory.Add(assistantMsg);
+
+            _userInput = "";
+            GUI.FocusControl(null); // 取消输入框焦点
+            ScrollToBottom();
+
+            StartGeneration(assistantMsg);
+        }
+
+        private void RetryMessage(ChatMessage msg)
+        {
+            msg.State = MessageState.Generating;
+            msg.ErrorMessage = "";
+            StartGeneration(msg);
+        }
+
+        private void StartGeneration(ChatMessage msg)
+        {
+            msg.IsCombinedPrefabPhase = false;
+            
+            switch (msg.Mode)
             {
                 case GenerateMode.Code:
-                    GenerateCode();
+                case GenerateMode.Combined:
+                    GenerateCode(msg);
                     break;
                 case GenerateMode.Prefab:
-                    GeneratePrefab();
-                    break;
-                case GenerateMode.Combined:
-                    GenerateCode();
+                    GeneratePrefab(msg);
                     break;
             }
         }
 
-        private async void GenerateCode()
+        private async void GenerateCode(ChatMessage msg)
         {
             if (_config == null)
             {
-                _errorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
-                _state = State.Error;
+                msg.ErrorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
+                msg.State = MessageState.Error;
                 return;
             }
-
-            _state = State.Loading;
-            Repaint();
 
             try
             {
                 var service = AIServiceFactory.Create(_config);
                 var context = ProjectContext.Collect();
 
-                var systemPrompt = PromptBuilder.BuildCodeSystemPrompt(context, _codeType);
-                var userPrompt = PromptBuilder.BuildCodeUserPrompt(_userInput);
+                var systemPrompt = PromptBuilder.BuildCodeSystemPrompt(context, msg.CodeType);
+                var userPrompt = PromptBuilder.BuildCodeUserPrompt(msg.Content);
 
                 var response = await service.SendMessageAsync(systemPrompt, userPrompt);
 
                 if (!response.Success)
                 {
-                    _errorMessage = response.Error ?? "AI 返回了未知错误";
-                    _state = State.Error;
-                    Repaint();
+                    msg.ErrorMessage = response.Error ?? "AI 返回了未知错误";
+                    msg.State = MessageState.Error;
                     return;
                 }
 
@@ -719,119 +616,60 @@ namespace UnityMCP.UI
 
                 if (!parseResult.Success)
                 {
-                    _errorMessage = parseResult.Error ?? "无法解析 AI 响应";
+                    msg.ErrorMessage = parseResult.Error ?? "无法解析 AI 响应";
                     if (!string.IsNullOrEmpty(parseResult.Code))
-                        _errorMessage += $"\n\nAI 原始输出:\n{parseResult.Code}";
-                    _state = State.Error;
-                    Repaint();
+                        msg.ErrorMessage += $"\n\nAI 原始输出:\n{parseResult.Code}";
+                    msg.State = MessageState.Error;
                     return;
                 }
 
-                _generatedCode = parseResult.Code;
-                _scriptName = parseResult.ScriptName;
-                _generationTime = response.Duration;
-                _tokensUsed = response.TokensUsed;
-                _state = State.CodePreview;
+                msg.GeneratedCode = parseResult.Code;
+                msg.ScriptName = parseResult.ScriptName;
+                msg.GenerationTime = response.Duration;
+                msg.TokensUsed = response.TokensUsed;
+                
+                if (msg.Mode == GenerateMode.Combined)
+                    msg.State = MessageState.CodeGenerated;
+                else
+                    msg.State = MessageState.Success;
             }
             catch (Exception ex)
             {
-                _errorMessage = $"生成过程中出错: {ex.Message}";
-                _state = State.Error;
+                msg.ErrorMessage = $"生成过程中出错: {ex.Message}";
+                msg.State = MessageState.Error;
             }
-
-            Repaint();
-        }
-
-        private async void GeneratePrefab()
-        {
-            if (_config == null)
+            finally
             {
-                _errorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
-                _state = State.Error;
-                return;
-            }
-
-            _state = State.Loading;
-            Repaint();
-
-            try
-            {
-                var service = AIServiceFactory.Create(_config);
-                var context = ProjectContext.Collect();
-
-                var systemPrompt = PromptBuilder.BuildPrefabSystemPrompt(context);
-                var userPrompt = PromptBuilder.BuildPrefabUserPrompt(_userInput);
-
-                var response = await service.SendMessageAsync(systemPrompt, userPrompt);
-
-                if (!response.Success)
-                {
-                    _errorMessage = response.Error ?? "AI 返回了未知错误";
-                    _state = State.Error;
-                    Repaint();
-                    return;
-                }
-
-                var parseResult = ResponseParser.ParsePrefabResponse(response.Content);
-
-                if (!parseResult.Success)
-                {
-                    _errorMessage = parseResult.Error ?? "无法解析预制体 JSON";
-                    if (!string.IsNullOrEmpty(parseResult.RawJson))
-                        _errorMessage += $"\n\nAI 原始输出:\n{parseResult.RawJson}";
-                    _state = State.Error;
-                    Repaint();
-                    return;
-                }
-
-                _prefabDescription = parseResult.Description;
-                _prefabName = parseResult.Description!.prefabName;
-                _rawJson = parseResult.RawJson;
-                _generationTime = response.Duration;
-                _tokensUsed = response.TokensUsed;
-                _state = State.PrefabPreview;
-            }
-            catch (Exception ex)
-            {
-                _errorMessage = $"生成过程中出错: {ex.Message}";
-                _state = State.Error;
-            }
-
-            Repaint();
-        }
-
-        /// <summary>
-        /// D4: 联合模式下生成预制体（编译完成后自动调用）
-        /// </summary>
-        private async void GenerateCombinedPrefab()
-        {
-            if (_config == null)
-            {
-                _errorMessage = "AI 服务未配置。";
-                _state = State.Error;
                 Repaint();
+                ScrollToBottom();
+            }
+        }
+
+        private async void GeneratePrefab(ChatMessage msg)
+        {
+            if (_config == null)
+            {
+                msg.ErrorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
+                msg.State = MessageState.Error;
                 return;
             }
-
-            _combinedPrefabPhase = true;
-            _state = State.Loading;
-            Repaint();
 
             try
             {
                 var service = AIServiceFactory.Create(_config);
                 var context = ProjectContext.Collect();
 
-                var systemPrompt = PromptBuilder.BuildPrefabSystemPrompt(context);
-                var userPrompt = PromptBuilder.BuildCombinedPrefabUserPrompt(_userInput, _scriptName);
+                string systemPrompt = PromptBuilder.BuildPrefabSystemPrompt(context);
+                string userPrompt = msg.Mode == GenerateMode.Combined 
+                    ? PromptBuilder.BuildCombinedPrefabUserPrompt(msg.Content, msg.ScriptName)
+                    : PromptBuilder.BuildPrefabUserPrompt(msg.Content);
 
                 var response = await service.SendMessageAsync(systemPrompt, userPrompt);
 
                 if (!response.Success)
                 {
-                    _errorMessage = response.Error ?? "AI 返回了未知错误";
-                    _state = State.Error;
-                    Repaint();
+                    msg.ErrorMessage = response.Error ?? "AI 返回了未知错误";
+                    msg.State = MessageState.Error;
                     return;
                 }
 
@@ -839,168 +677,144 @@ namespace UnityMCP.UI
 
                 if (!parseResult.Success)
                 {
-                    _errorMessage = parseResult.Error ?? "无法解析预制体 JSON";
+                    msg.ErrorMessage = parseResult.Error ?? "无法解析预制体 JSON";
                     if (!string.IsNullOrEmpty(parseResult.RawJson))
-                        _errorMessage += $"\n\nAI 原始输出:\n{parseResult.RawJson}";
-                    _state = State.Error;
-                    Repaint();
+                        msg.ErrorMessage += $"\n\nAI 原始输出:\n{parseResult.RawJson}";
+                    msg.State = MessageState.Error;
                     return;
                 }
 
-                _prefabDescription = parseResult.Description;
-                _prefabName = parseResult.Description!.prefabName;
-                _rawJson = parseResult.RawJson;
-                _generationTime = response.Duration;
-                _tokensUsed = response.TokensUsed;
-                _state = State.PrefabPreview;
+                msg.PrefabDescription = parseResult.Description;
+                msg.PrefabName = parseResult.Description!.prefabName;
+                msg.RawJson = parseResult.RawJson;
+                msg.GenerationTime = response.Duration;
+                msg.TokensUsed = response.TokensUsed;
+                msg.State = MessageState.Success;
             }
             catch (Exception ex)
             {
-                _errorMessage = $"生成预制体时出错: {ex.Message}";
-                _state = State.Error;
+                msg.ErrorMessage = $"生成过程中出错: {ex.Message}";
+                msg.State = MessageState.Error;
             }
-
-            Repaint();
+            finally
+            {
+                Repaint();
+                ScrollToBottom();
+            }
         }
 
         #endregion
 
         #region 保存逻辑
 
-        private void SaveScript()
+        private void SaveScript(ChatMessage msg)
         {
-            if (string.IsNullOrEmpty(_scriptName))
+            if (string.IsNullOrEmpty(msg.ScriptName))
             {
                 EditorUtility.DisplayDialog("错误", "脚本名称不能为空", "确定");
                 return;
             }
 
-            if (ScriptGenerator.ScriptExists(_scriptName))
+            if (ScriptGenerator.ScriptExists(msg.ScriptName))
             {
-                if (!EditorUtility.DisplayDialog(
-                    "文件已存在",
-                    $"{_scriptName}.cs 已存在，是否覆盖？\n（原文件将自动备份为 .cs.bak）",
-                    "覆盖", "取消"))
+                if (!EditorUtility.DisplayDialog("文件已存在", $"{msg.ScriptName}.cs 已存在，是否覆盖？", "覆盖", "取消"))
                     return;
             }
 
-            var result = ScriptGenerator.SaveScript(_scriptName, _generatedCode);
-
+            var result = ScriptGenerator.SaveScript(msg.ScriptName, msg.GeneratedCode);
             if (result.Success)
             {
-                _savedFilePath = result.FilePath;
-                _state = State.Success;
+                msg.SavedScriptPath = result.FilePath;
+                Repaint();
             }
             else
             {
-                _errorMessage = result.Error ?? "保存失败";
-                _state = State.Error;
+                EditorUtility.DisplayDialog("保存失败", result.Error ?? "未知错误", "确定");
             }
-
-            Repaint();
         }
 
-        private void SavePrefab()
+        private void SavePrefab(ChatMessage msg)
         {
-            if (_prefabDescription == null)
-            {
-                EditorUtility.DisplayDialog("错误", "预制体描述为空", "确定");
-                return;
-            }
+            if (msg.PrefabDescription == null || string.IsNullOrEmpty(msg.PrefabName)) return;
 
-            if (string.IsNullOrEmpty(_prefabName))
-            {
-                EditorUtility.DisplayDialog("错误", "预制体名称不能为空", "确定");
-                return;
-            }
-
-            _prefabDescription.prefabName = _prefabName;
-
-            var result = PrefabGenerator.Generate(_prefabDescription);
+            msg.PrefabDescription.prefabName = msg.PrefabName;
+            var result = PrefabGenerator.Generate(msg.PrefabDescription);
 
             if (result.Success)
             {
-                _savedFilePath = result.AssetPath;
-                _prefabWarnings = result.Warnings;
-                _state = State.Success;
+                msg.SavedPrefabPath = result.AssetPath;
+                msg.PrefabWarnings = result.Warnings;
+                Repaint();
             }
             else
             {
-                _errorMessage = result.Error ?? "保存预制体失败";
-                if (result.Warnings.Count > 0)
-                    _errorMessage += "\n\n警告:\n" + string.Join("\n", result.Warnings);
-                _state = State.Error;
+                string err = result.Error ?? "未知错误";
+                if (result.Warnings.Count > 0) err += "\n" + string.Join("\n", result.Warnings);
+                EditorUtility.DisplayDialog("保存失败", err, "确定");
             }
-
-            Repaint();
         }
 
-        /// <summary>
-        /// D4: 联合模式 - 保存代码后进入编译等待
-        /// </summary>
-        private void SaveCodeAndContinueCombined()
+        private void SaveCodeAndContinueCombined(ChatMessage msg)
         {
-            if (string.IsNullOrEmpty(_scriptName))
-            {
-                EditorUtility.DisplayDialog("错误", "脚本名称不能为空", "确定");
-                return;
-            }
+            if (string.IsNullOrEmpty(msg.ScriptName)) return;
 
-            if (ScriptGenerator.ScriptExists(_scriptName))
+            if (ScriptGenerator.ScriptExists(msg.ScriptName))
             {
-                if (!EditorUtility.DisplayDialog(
-                    "文件已存在",
-                    $"{_scriptName}.cs 已存在，是否覆盖？\n（原文件将自动备份为 .cs.bak）",
-                    "覆盖", "取消"))
+                if (!EditorUtility.DisplayDialog("文件已存在", $"{msg.ScriptName}.cs 已存在，是否覆盖？", "覆盖", "取消"))
                     return;
             }
 
-            // 保存代码生成阶段的耗时统计
-            _codeGenerationTime = _generationTime;
-            _codeTokensUsed = _tokensUsed;
+            // 保存耗时统计，因为GeneratePrefab会覆盖它
+            msg.CodeGenerationTime = msg.GenerationTime;
+            msg.CodeTokensUsed = msg.TokensUsed;
 
-            var result = ScriptGenerator.SaveScript(_scriptName, _generatedCode);
-
+            var result = ScriptGenerator.SaveScript(msg.ScriptName, msg.GeneratedCode);
             if (!result.Success)
             {
-                _errorMessage = result.Error ?? "保存失败";
-                _state = State.Error;
-                Repaint();
+                EditorUtility.DisplayDialog("保存失败", result.Error ?? "未知错误", "确定");
                 return;
             }
 
-            _savedScriptPath = result.FilePath;
-
-            // 进入编译等待
+            msg.SavedScriptPath = result.FilePath;
+            msg.State = MessageState.WaitingCompile;
+            msg.CompileWaitTicks = 0;
             _compilationDetected = false;
-            _compileWaitTicks = 0;
-            _state = State.WaitingCompile;
-
+            
+            _pendingCompileMessage = msg;
             EditorApplication.update += OnCompileWaitUpdate;
             Repaint();
         }
 
-        /// <summary>
-        /// D4: 编译等待轮询回调。
-        /// 策略：先等 isCompiling 变为 true（编译开始），再等变为 false（编译完成）。
-        /// 如果超过 15 秒仍未检测到编译，视为编译已完成（脚本可能没有实际变化）。
-        /// </summary>
         private void OnCompileWaitUpdate()
         {
-            _compileWaitTicks++;
+            if (_pendingCompileMessage == null)
+            {
+                EditorApplication.update -= OnCompileWaitUpdate;
+                return;
+            }
+
+            _pendingCompileMessage.CompileWaitTicks++;
 
             if (EditorApplication.isCompiling)
             {
                 _compilationDetected = true;
             }
-            else if (_compilationDetected || _compileWaitTicks > 150)
+            else if (_compilationDetected || _pendingCompileMessage.CompileWaitTicks > 150)
             {
                 EditorApplication.update -= OnCompileWaitUpdate;
-                GenerateCombinedPrefab();
+                _pendingCompileMessage.IsCombinedPrefabPhase = true;
+                _pendingCompileMessage.State = MessageState.Generating;
+                GeneratePrefab(_pendingCompileMessage);
+                _pendingCompileMessage = null;
                 return;
             }
 
             Repaint();
+        }
+
+        private void ScrollToBottom()
+        {
+            _chatScrollPos.y = float.MaxValue;
         }
 
         #endregion
