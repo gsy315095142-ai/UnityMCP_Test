@@ -17,7 +17,7 @@ namespace UnityMCP.Generators
     public static class ComponentConfigurator
     {
         /// <summary>
-        /// 常用组件类型的短名映射，AI 可以用短名来指定组件
+        /// 常用组件类型的短名映射（引擎内置类型，编译期可确定）
         /// </summary>
         private static readonly Dictionary<string, Type> ShortNameMap = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -43,10 +43,11 @@ namespace UnityMCP.Generators
             { "AudioSource", typeof(AudioSource) },
             { "AudioListener", typeof(AudioListener) },
 
-            // UI
+            // UI 基础
             { "Canvas", typeof(Canvas) },
             { "CanvasRenderer", typeof(CanvasRenderer) },
             { "RectTransform", typeof(RectTransform) },
+            { "CanvasGroup", typeof(CanvasGroup) },
 
             // 动画
             { "Animator", typeof(Animator) },
@@ -61,11 +62,51 @@ namespace UnityMCP.Generators
         };
 
         /// <summary>
+        /// UGUI / TextMeshPro 组件的全限定名映射。
+        /// 这些类型位于独立程序集，不能在编译期用 typeof() 引用，
+        /// 通过运行时按 FullName 在已加载程序集中查找。
+        /// </summary>
+        private static readonly Dictionary<string, string> QualifiedNameMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // UnityEngine.UI (com.unity.ugui)
+            { "Image", "UnityEngine.UI.Image" },
+            { "RawImage", "UnityEngine.UI.RawImage" },
+            { "Button", "UnityEngine.UI.Button" },
+            { "Toggle", "UnityEngine.UI.Toggle" },
+            { "Slider", "UnityEngine.UI.Slider" },
+            { "Scrollbar", "UnityEngine.UI.Scrollbar" },
+            { "Dropdown", "UnityEngine.UI.Dropdown" },
+            { "InputField", "UnityEngine.UI.InputField" },
+            { "Text", "UnityEngine.UI.Text" },
+            { "ScrollRect", "UnityEngine.UI.ScrollRect" },
+            { "Mask", "UnityEngine.UI.Mask" },
+            { "RectMask2D", "UnityEngine.UI.RectMask2D" },
+            { "CanvasScaler", "UnityEngine.UI.CanvasScaler" },
+            { "GraphicRaycaster", "UnityEngine.UI.GraphicRaycaster" },
+            { "Outline", "UnityEngine.UI.Outline" },
+            { "Shadow", "UnityEngine.UI.Shadow" },
+            { "LayoutElement", "UnityEngine.UI.LayoutElement" },
+            { "HorizontalLayoutGroup", "UnityEngine.UI.HorizontalLayoutGroup" },
+            { "VerticalLayoutGroup", "UnityEngine.UI.VerticalLayoutGroup" },
+            { "GridLayoutGroup", "UnityEngine.UI.GridLayoutGroup" },
+            { "ContentSizeFitter", "UnityEngine.UI.ContentSizeFitter" },
+            { "AspectRatioFitter", "UnityEngine.UI.AspectRatioFitter" },
+
+            // TMPro (com.unity.textmeshpro)
+            { "TextMeshProUGUI", "TMPro.TextMeshProUGUI" },
+            { "TextMeshPro", "TMPro.TextMeshPro" },
+            { "TMP_InputField", "TMPro.TMP_InputField" },
+            { "TMP_Dropdown", "TMPro.TMP_Dropdown" },
+        };
+
+        /// <summary>
+        /// 类型解析缓存，避免重复扫描程序集
+        /// </summary>
+        private static readonly Dictionary<string, Type?> _resolveCache = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
         /// 根据组件描述向 GameObject 添加组件并设置属性
         /// </summary>
-        /// <param name="go">目标 GameObject</param>
-        /// <param name="desc">组件描述</param>
-        /// <returns>添加结果，包含错误信息（如有）</returns>
         public static ComponentResult AddAndConfigure(GameObject go, ComponentDescription desc)
         {
             var componentType = ResolveType(desc.type);
@@ -107,7 +148,8 @@ namespace UnityMCP.Generators
         }
 
         /// <summary>
-        /// 解析类型名称为 Type 对象
+        /// 解析类型名称为 Type 对象。
+        /// 优先级: ShortNameMap → QualifiedNameMap → Type.GetType → 程序集扫描
         /// </summary>
         private static Type? ResolveType(string typeName)
         {
@@ -116,9 +158,21 @@ namespace UnityMCP.Generators
 
             typeName = typeName.Trim();
 
-            if (ShortNameMap.TryGetValue(typeName, out var mappedType))
-                return mappedType;
+            if (_resolveCache.TryGetValue(typeName, out var cached))
+                return cached;
 
+            var resolved = ResolveTypeInternal(typeName);
+            _resolveCache[typeName] = resolved;
+            return resolved;
+        }
+
+        private static Type? ResolveTypeInternal(string typeName)
+        {
+            // 1) 内置短名直接映射
+            if (ShortNameMap.TryGetValue(typeName, out var mapped))
+                return mapped;
+
+            // 2) "UnityEngine.Rigidbody" 等全名 → 提取短名再试
             var lastDot = typeName.LastIndexOf('.');
             if (lastDot >= 0)
             {
@@ -127,20 +181,64 @@ namespace UnityMCP.Generators
                     return fromFull;
             }
 
-            var resolved = Type.GetType(typeName);
-            if (resolved != null)
-                return resolved;
-
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            foreach (var asm in assemblies)
+            // 3) UGUI/TMPro 全限定名映射 → 按 FullName 搜索程序集
+            string? qualifiedTarget = null;
+            if (QualifiedNameMap.TryGetValue(typeName, out var qn))
             {
-                resolved = asm.GetTypes().FirstOrDefault(t =>
-                    t.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase) ||
-                    t.FullName != null && t.FullName.Equals(typeName, StringComparison.OrdinalIgnoreCase));
-                if (resolved != null && typeof(Component).IsAssignableFrom(resolved))
-                    return resolved;
+                qualifiedTarget = qn;
+            }
+            else if (lastDot >= 0)
+            {
+                var shortName = typeName.Substring(lastDot + 1);
+                if (QualifiedNameMap.TryGetValue(shortName, out var qn2))
+                    qualifiedTarget = qn2;
             }
 
+            if (qualifiedTarget != null)
+            {
+                var found = FindTypeByFullName(qualifiedTarget);
+                if (found != null) return found;
+            }
+
+            // 4) Type.GetType 尝试（对程序集限定名有效）
+            var direct = Type.GetType(typeName);
+            if (direct != null && typeof(Component).IsAssignableFrom(direct))
+                return direct;
+
+            // 5) 全程序集按 Name / FullName 扫描（兜底，处理用户自定义脚本）
+            return FindTypeInAllAssemblies(typeName);
+        }
+
+        private static Type? FindTypeByFullName(string fullName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var t = asm.GetType(fullName);
+                    if (t != null && typeof(Component).IsAssignableFrom(t))
+                        return t;
+                }
+                catch (ReflectionTypeLoadException) { }
+            }
+            return null;
+        }
+
+        private static Type? FindTypeInAllAssemblies(string typeName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var found = asm.GetTypes().FirstOrDefault(t =>
+                        typeof(Component).IsAssignableFrom(t) &&
+                        (t.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase) ||
+                         (t.FullName != null && t.FullName.Equals(typeName, StringComparison.OrdinalIgnoreCase))));
+                    if (found != null)
+                        return found;
+                }
+                catch (ReflectionTypeLoadException) { }
+            }
             return null;
         }
 

@@ -20,7 +20,7 @@ namespace UnityMCP.UI
                 "版本: 0.1.0 (Phase 1 MVP)\n" +
                 "功能: AI 驱动的代码生成\n\n" +
                 "快捷键:\n" +
-                "  Ctrl+Shift+G  快捷生成\n" +
+                "  Ctrl+Shift+.  快捷生成\n" +
                 "  Ctrl+Shift+,  打开设置\n\n" +
                 "当前支持: Ollama 本地模型\n" +
                 "计划支持: Claude, OpenAI, Azure",
