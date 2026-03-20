@@ -91,6 +91,7 @@ namespace Game.Generated
 
         private const string IntentRouteFewShot = @"
 ## 路由输出示例
+用户：做一个带按钮和文字的登录界面预制体
 ```json
 {
   ""generationTarget"": ""prefab"",
@@ -98,7 +99,9 @@ namespace Game.Generated
 }
 ```
 
-场景层级 / 当前场景内改物体 → sceneOps：
+用户：你好，请帮忙生成一个带按钮的UI（未提当前场景 / Hierarchy）→ 仍选 prefab（可保存的 UI 预制体资源；不是当场改场景层级）。
+
+用户：在当前打开的场景根下建 Canvas，下面放 Panel 和 Button（或明确：在 Hierarchy 里搭一套 UI）→ sceneOps：
 ```json
 {
   ""generationTarget"": ""sceneOps"",
@@ -175,8 +178,8 @@ JSON 格式（字段名必须一致）：
 
 判断规则（generationTarget）：
 - ""code""：用户主要需要 C# 脚本、类、逻辑、算法、配置数据类型（ScriptableObject）说明但仍在代码层面；或明确只要脚本不要预制体。
-- ""prefab""：用户主要描述**生成预制体资源（Prefab 资产）**、可被保存到 Project 的物体模板；或明确要「做成 prefab 文件」。
-- ""sceneOps""：用户要在**当前正在编辑的场景**里直接改层级：创建空物体、改父节点、挂内置组件、改 Transform、把已有 .prefab **实例化进场景**；强调「放到场景里」「当前场景」「Hierarchy」而非新建 prefab 资产。
+- ""prefab""：用户主要描述**生成预制体资源（Prefab 资产）**、可被保存到 Project 的物体模板；或明确要「做成 prefab 文件」。**含 UI / 界面 / Canvas / 按钮 / 面板 / 菜单 等描述时，若未明确说「在当前场景 / Hierarchy 里搭建」「不要 prefab」，一律优先 prefab**（常见需求是生成可复用的 UI 预制体，而不是当场改打开的场景）。
+- ""sceneOps""：用户**明确**要在**当前正在编辑的场景**里直接改层级：创建空物体、改父节点、挂内置组件、改 Transform、把已有 .prefab **实例化进场景**；须体现「当前场景」「Hierarchy」「在场景根/某路径下建」「放到场景里」「给打开的场景加物体」等；仅有「做一个 UI」而无场景语境时**不要**选 sceneOps。
 - ""both""：用户同时需要「新脚本逻辑」和「可被实例化的预制体」，例如：带移动脚本的玩家预制体、挂接自定义 MonoBehaviour 的道具、需要挂载刚生成脚本的物体等。
 
 codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""auto""）：

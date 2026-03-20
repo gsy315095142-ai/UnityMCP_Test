@@ -33,7 +33,7 @@ namespace UnityMCP.Tools
             }
 
             var root = NormalizeHierarchyPath(settings.HierarchyRoot);
-            var prefabPrefix = NormalizeAssetPrefix(settings.PrefabAssetPrefix);
+            var prefabPrefix = SceneWorkspaceSettings.CanonicalAssetFolderPath(settings.PrefabAssetPrefix);
             var hasSubtreeRoot = !string.IsNullOrEmpty(root);
             var hasPrefabPrefix = !string.IsNullOrEmpty(prefabPrefix);
             var hasHierarchyCoverage = settings.HierarchyUseEntireActiveScene || hasSubtreeRoot;

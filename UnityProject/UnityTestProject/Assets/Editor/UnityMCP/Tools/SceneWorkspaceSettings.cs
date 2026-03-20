@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using UnityEditor;
 
 namespace UnityMCP.Tools
@@ -45,6 +46,21 @@ namespace UnityMCP.Tools
             EditorPrefs.SetString(PrefHierarchyRoot, HierarchyRoot ?? "");
             EditorPrefs.SetBool(PrefHierarchyEntireActiveScene, HierarchyUseEntireActiveScene);
             EditorPrefs.SetString(PrefPrefabPrefix, PrefabAssetPrefix ?? "");
+        }
+
+        /// <summary>
+        /// 规范为 Assets/ 下文件夹路径（不强制结尾 /）。用于预制体保存目录与 instantiatePrefab 前缀比对。
+        /// </summary>
+        public static string CanonicalAssetFolderPath(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "";
+            var p = raw.Trim().Replace('\\', '/').TrimEnd('/');
+            if (string.IsNullOrEmpty(p))
+                return "";
+            if (p.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return p;
+            return "Assets/" + p.TrimStart('/');
         }
     }
 }

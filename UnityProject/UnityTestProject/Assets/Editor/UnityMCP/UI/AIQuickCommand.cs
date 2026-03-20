@@ -360,6 +360,7 @@ namespace UnityMCP.UI
             "· 或填写「预制体路径前缀」（限制 instantiatePrefab 引用的资源路径）\n\n" +
             "说明：此处约束的是「当前活动场景」的 Hierarchy，与在 Project 里点选 .unity 文件不是同一套操作；" +
             "整场景模式表示当前正在编辑的这一套层级均可操作（仍可按预制体前缀限制资源）。\n\n" +
+            "预制体路径前缀：AI「创建预制体」会保存到该文件夹（可不勾选「启用限制」也可填写）；可写 Assets/... 或相对路径（自动补全 Assets/）。未填写时默认为 Assets/Prefabs/Generated。\n\n" +
             "执行 scene-ops 时，若某步超出上述范围，将逐步询问「执行此项 / 中止整批 / 跳过此项」。";
 
         private void DrawWorkspaceScopePanel()
@@ -448,13 +449,16 @@ namespace UnityMCP.UI
                     s.HierarchyRoot = roots[newHierarchyPopup - 1].name;
 
                 EditorGUI.EndDisabledGroup();
+                // 层级约束依赖「启用限制」；预制体保存目录与 scene-ops 校验是两套需求，须始终可编辑。
+                EditorGUI.EndDisabledGroup();
 
                 EditorGUILayout.Space(4);
 
                 // —— 预制体路径前缀（磁盘 / Assets 目录）——
                 EditorGUILayout.LabelField("预制体路径前缀（Assets 下文件夹）", EditorStyles.label);
                 s.PrefabAssetPrefix = EditorGUILayout.TextField(
-                    new GUIContent(string.Empty, "instantiatePrefab 的资源路径须以此开头，如 Assets/Lumi/Prefabs。"),
+                    new GUIContent(string.Empty,
+                        "instantiatePrefab 的资源路径须以此开头；填写文件夹路径后，AI「创建预制体」会写入此处（可写 Assets/... 或以工程根为基准的相对路径，会自动补全 Assets/）。未填写时默认为 Assets/Prefabs/Generated。"),
                     s.PrefabAssetPrefix);
 
                 var folders = GetCachedAssetFolders();
@@ -487,7 +491,6 @@ namespace UnityMCP.UI
 
                 EditorGUILayout.EndHorizontal();
 
-                EditorGUI.EndDisabledGroup();
                 if (EditorGUI.EndChangeCheck())
                     s.SaveToEditorPrefs();
             }
@@ -498,6 +501,19 @@ namespace UnityMCP.UI
             if (string.IsNullOrWhiteSpace(path))
                 return "";
             return path.Trim().Replace('\\', '/').TrimEnd('/');
+        }
+
+        /// <summary>
+        /// AI 生成预制体的落盘目录：与工作区「预制体路径前缀」对齐（须为 Assets/ 下文件夹），否则用项目默认。
+        /// </summary>
+        private static string ResolvePrefabSaveFolder()
+        {
+            var ws = SceneWorkspaceSettings.LoadFromEditorPrefs();
+            var prefix = SceneWorkspaceSettings.CanonicalAssetFolderPath(ws.PrefabAssetPrefix);
+            if (!string.IsNullOrEmpty(prefix))
+                return prefix;
+
+            return ProjectContext.Collect().PrefabOutputPath;
         }
 
         private void DrawChatHistory()
@@ -709,7 +725,10 @@ namespace UnityMCP.UI
             EditorGUILayout.LabelField(".prefab", GUILayout.Width(50));
             EditorGUILayout.EndHorizontal();
 
-            if (PrefabGenerator.PrefabExists(msg.PrefabName))
+            var saveDir = ResolvePrefabSaveFolder();
+            DrawSelectableLabel($"保存目录: {saveDir}/", EditorStyles.miniLabel);
+
+            if (PrefabGenerator.PrefabExists(msg.PrefabName, saveDir))
                 DrawSelectableHelpPane($"预制体 {msg.PrefabName}.prefab 已存在，保存将覆盖");
 
             EditorGUILayout.Space(5);
@@ -1408,7 +1427,7 @@ namespace UnityMCP.UI
             if (msg.PrefabDescription == null || string.IsNullOrEmpty(msg.PrefabName)) return;
 
             msg.PrefabDescription.prefabName = msg.PrefabName;
-            var result = PrefabGenerator.Generate(msg.PrefabDescription);
+            var result = PrefabGenerator.Generate(msg.PrefabDescription, ResolvePrefabSaveFolder());
 
             if (result.Success)
             {
