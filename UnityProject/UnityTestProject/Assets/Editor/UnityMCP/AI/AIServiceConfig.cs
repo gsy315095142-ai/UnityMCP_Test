@@ -53,6 +53,10 @@ namespace UnityMCP.AI
         [Range(0.2f, 10f)]
         public float requestRetryDelaySeconds = 1.25f;
 
+        [Tooltip("聊天记忆：发往模型的「用户+助手」轮数上限（最新几轮）；超出则丢弃最早一轮。0 表示关闭多轮记忆。")]
+        [Range(0, 32)]
+        public int chatMemoryMaxTurns = 6;
+
         private const string PREFS_KEY = "UnityMCP_AIServiceConfig";
         private const string API_KEY_PREFS_KEY = "UnityMCP_APIKey_Encrypted";
 
@@ -209,6 +213,7 @@ namespace UnityMCP.AI
             maxTokens = 4000;
             requestRetries = 2;
             requestRetryDelaySeconds = 1.25f;
+            chatMemoryMaxTurns = 6;
         }
     }
 }

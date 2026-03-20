@@ -901,6 +901,16 @@ namespace UnityMCP.UI
             ExecuteTaskPhase(contextMsg);
         }
 
+        /// <summary>
+        /// 根据设置与当前聊天历史构造多轮记忆（不含本轮用户句）。
+        /// </summary>
+        private IReadOnlyList<ChatMemoryTurn> BuildChatMemory(string currentUserContent)
+        {
+            if (_config == null || _config.chatMemoryMaxTurns <= 0)
+                return Array.Empty<ChatMemoryTurn>();
+            return ChatHistoryMemoryBuilder.BuildPriorTurns(_chatHistory, _config.chatMemoryMaxTurns, currentUserContent);
+        }
+
         private void RetryTask(ChatMessage failedMsg)
         {
             // 对于重试，我们复制原任务信息，并重新执行
@@ -1001,8 +1011,8 @@ namespace UnityMCP.UI
                 var projContext = ProjectContext.Collect();
                 var systemPrompt = PromptBuilder.BuildIntentRouteSystemPrompt(projContext);
                 var userPrompt = PromptBuilder.BuildIntentRouteUserPrompt(context.Content);
-
-                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt);
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
 
                 if (!response.Success)
                 {
@@ -1094,8 +1104,8 @@ namespace UnityMCP.UI
 
                 var systemPrompt = PromptBuilder.BuildCodeSystemPrompt(projContext, context.CodeType);
                 var userPrompt = PromptBuilder.BuildCodeUserPrompt(context.Content);
-
-                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt);
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
 
                 if (!response.Success)
                 {
@@ -1161,7 +1171,8 @@ namespace UnityMCP.UI
                     ? PromptBuilder.BuildCombinedPrefabUserPrompt(context.Content, context.ScriptName)
                     : PromptBuilder.BuildPrefabUserPrompt(context.Content);
 
-                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt);
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
 
                 if (!response.Success)
                 {
@@ -1228,7 +1239,8 @@ namespace UnityMCP.UI
                     PromptBuilder.GetActiveSceneNameForPrompt(),
                     appendProjectBrief: false);
 
-                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt);
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
 
                 if (!response.Success)
                 {
@@ -1276,6 +1288,12 @@ namespace UnityMCP.UI
             if (msg.SceneOpsEnvelope == null)
             {
                 EditorUtility.DisplayDialog("场景操控", "内部错误：未找到已解析的操作列表。", "确定");
+                return;
+            }
+
+            if (!SceneOpsPreflight.TryValidateSelectionPlaceholder(msg.SceneOpsEnvelope, out var preflightMsg))
+            {
+                EditorUtility.DisplayDialog("场景操控无法执行", preflightMsg, "确定");
                 return;
             }
 

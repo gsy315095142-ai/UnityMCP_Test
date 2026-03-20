@@ -184,6 +184,14 @@ namespace UnityMCP.UI
                 _config.maxTokens = EditorGUILayout.IntSlider(
                     "最大 Token 数", _config.maxTokens, 512, 16384);
 
+                _config.chatMemoryMaxTurns = EditorGUILayout.IntSlider(
+                    new GUIContent(
+                        "聊天记忆轮数",
+                        "每次请求附带最近几轮「用户+助手」摘要；超出则从最早一轮丢弃。0 关闭。"),
+                    _config.chatMemoryMaxTurns,
+                    0,
+                    32);
+
                 EditorGUILayout.Space(6);
                 EditorGUILayout.LabelField("稳定性（Phase 2-B）", EditorStyles.boldLabel);
                 _config.requestRetries = EditorGUILayout.IntSlider(

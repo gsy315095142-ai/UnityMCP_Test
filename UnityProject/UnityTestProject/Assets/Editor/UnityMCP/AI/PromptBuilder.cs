@@ -1,5 +1,6 @@
 #nullable enable
 
+using UnityEditor;
 using UnityEngine.SceneManagement;
 using UnityMCP.Core;
 using UnityMCP.Tools;
@@ -148,6 +149,20 @@ namespace Game.Generated
   ]
 }
 ```
+
+## unity-ops 示例 4：在已有 UI 下加按钮（勿用 __selection__，须写明层级路径）
+用户：在 Canvas 里的面板上加一个可点按钮，文字为「确认」
+应输出类似（parentPath 用从场景根起的路径；常见为 Canvas/Panel 或 Canvas 下实际容器名）：
+```json
+{
+  ""unityOpsVersion"": 1,
+  ""operations"": [
+    { ""op"": ""createEmpty"", ""name"": ""BtnConfirm"", ""parentPath"": ""Canvas/Panel"" },
+    { ""op"": ""addComponent"", ""path"": ""Canvas/Panel/BtnConfirm"", ""typeName"": ""UnityEngine.UI.Button"" }
+  ]
+}
+```
+说明：UI 文案改 Text 子物体或需额外步骤；此处仅示范**父路径必须明确**，不要用 __selection__。
 ";
 
         private const string LocalModelDiscipline = @"
@@ -250,12 +265,13 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 ## 路径规则（与插件解析一致）
 - **层级路径 path**：从**活动场景根**下第一级子物体名开始，用英文斜杠拼接，如 Canvas/Panel/BtnOk；每一级取**同名第一个**子物体。
 - **parentPath / newParentPath**：同上规则；留空或省略表示**场景根**下创建/实例化。
-- **__selection__**：表示使用当前在 Hierarchy 中选中的 GameObject 作为父节点（用户必须已选中一个物体）。
+- **__selection__**：仅当用户**明确说了**「挂到当前选中的物体」「在 Hierarchy 选中的下面」「用选中物体作父」等时才可用；且执行时用户必须在 Hierarchy 里已选中父物体。**用户说「在这个 UI 上」「给界面加按钮」而未提选中时，一律写明确路径（如 Canvas/Panel），禁止 __selection__**（否则极易因未选中而执行失败）。
 - **prefabAssetPath**：必须以 Assets/ 开头，以 .prefab 结尾，禁止 "".."" 段。
 
 ## 注意
 - 不要输出 C# 或预制体 JSON（prefabName/rootObject 那套）；本任务**只输出 unity-ops**。
 - 若需求含糊，做**最小安全**操作并少步完成；不要臆造不存在的预制体路径。
+- 追加/修改 UI 时：若用户未给出路径，可假设常见层级 **Canvas** 或 **Canvas/Panel**（与场景实际命名一致）；仍**不要**用 __selection__ 代替猜测。
 - 向量与欧拉角字符串使用**英文逗号**，不要额外空格也可（插件按 InvariantCulture 解析）。
 
 {context.ToPromptContextSceneOpsBrief()}";
@@ -281,6 +297,8 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
             var body = $@"## 当前活动场景
 {sceneLine}
 
+{BuildSceneOpsHierarchyEditorHint()}
+
 ## 用户需求（原文）
 {userRequest}
 
@@ -291,6 +309,35 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 
             var ctx = projectContext ?? ProjectContext.Collect();
             return body + "\n\n" + ctx.ToPromptContextSceneOpsBrief();
+        }
+
+        /// <summary>
+        /// 告诉模型当前是否选中物体；未选中时禁止产出 __selection__，减少执行失败。
+        /// </summary>
+        private static string BuildSceneOpsHierarchyEditorHint()
+        {
+            var scene = SceneManager.GetActiveScene();
+            var sel = Selection.activeGameObject;
+            if (sel != null && scene.IsValid())
+            {
+                var path = HierarchyLocator.GetHierarchyPath(scene, sel);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    return "## 编辑器状态（Hierarchy）\n" +
+                           $"当前**已选中**物体，层级路径为：`{path}`\n" +
+                           "若用户希望挂到「这个 UI」且与选中一致，可把 createEmpty / instantiatePrefab 的 parentPath **直接写成上述路径**（优于 __selection__，避免用户改选后路径漂移）。\n" +
+                           "仅在用户**原文明确要求**用当前选中作父时，才使用 `__selection__`。";
+                }
+
+                return "## 编辑器状态（Hierarchy）\n" +
+                       "当前有选中物体，但无法解析其在活动场景下的层级路径（可能不属于活动场景）。\n" +
+                       "请勿使用 `__selection__`；请根据用户需求写明确路径（如 Canvas/Panel）。";
+            }
+
+            return "## 编辑器状态（Hierarchy）\n" +
+                   "当前**未选中**任何 GameObject。\n" +
+                   "**禁止** 在 JSON 的 parentPath / newParentPath 中使用 `__selection__`（会导致执行第一步就失败）。\n" +
+                   "请根据用户需求写**从场景根起的完整路径**（如 `Canvas`、`Canvas/Panel`）。用户说「在这个 UI 上」时，用场景中已有的 UI 根/容器路径，不要写 __selection__。";
         }
 
         #endregion

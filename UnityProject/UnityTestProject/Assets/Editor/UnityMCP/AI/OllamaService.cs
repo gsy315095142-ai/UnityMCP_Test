@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -23,7 +24,13 @@ namespace UnityMCP.AI
             _config = config;
         }
 
-        public async Task<AIResponse> SendMessageAsync(string systemPrompt, string userMessage)
+        public Task<AIResponse> SendMessageAsync(string systemPrompt, string userMessage) =>
+            SendMessageAsync(systemPrompt, null, userMessage);
+
+        public async Task<AIResponse> SendMessageAsync(
+            string systemPrompt,
+            IReadOnlyList<ChatMemoryTurn>? priorTurns,
+            string userMessage)
         {
             var startTime = Time.realtimeSinceStartup;
             var url = $"{_config.GetEffectiveEndpoint()}/api/chat";
@@ -31,11 +38,7 @@ namespace UnityMCP.AI
             var requestBody = new OllamaChatRequest
             {
                 model = _config.GetEffectiveModel(),
-                messages = new[]
-                {
-                    new OllamaMessage { role = "system", content = systemPrompt },
-                    new OllamaMessage { role = "user", content = userMessage }
-                },
+                messages = BuildOllamaMessages(systemPrompt, priorTurns, userMessage),
                 stream = false,
                 options = new OllamaOptions
                 {
@@ -81,6 +84,30 @@ namespace UnityMCP.AI
             {
                 return false;
             }
+        }
+
+        private static OllamaMessage[] BuildOllamaMessages(
+            string systemPrompt,
+            IReadOnlyList<ChatMemoryTurn>? priorTurns,
+            string userMessage)
+        {
+            var list = new List<OllamaMessage>
+            {
+                new() { role = "system", content = systemPrompt }
+            };
+
+            if (priorTurns != null)
+            {
+                foreach (var t in priorTurns)
+                {
+                    var r = (t.Role ?? "").Trim().ToLowerInvariant();
+                    if (r != "user" && r != "assistant") continue;
+                    list.Add(new OllamaMessage { role = r, content = t.Content ?? "" });
+                }
+            }
+
+            list.Add(new OllamaMessage { role = "user", content = userMessage });
+            return list.ToArray();
         }
 
         private static Task<string> SendHttpPostAsync(string url, string jsonBody)

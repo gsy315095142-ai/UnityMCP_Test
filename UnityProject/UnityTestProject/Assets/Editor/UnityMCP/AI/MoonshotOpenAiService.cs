@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -48,7 +49,13 @@ namespace UnityMCP.AI
             _config = config;
         }
 
-        public async Task<AIResponse> SendMessageAsync(string systemPrompt, string userMessage)
+        public Task<AIResponse> SendMessageAsync(string systemPrompt, string userMessage) =>
+            SendMessageAsync(systemPrompt, null, userMessage);
+
+        public async Task<AIResponse> SendMessageAsync(
+            string systemPrompt,
+            IReadOnlyList<ChatMemoryTurn>? priorTurns,
+            string userMessage)
         {
             if (string.IsNullOrWhiteSpace(_config.apiKey))
                 return AIResponse.Fail("请先填写 Moonshot API Key（platform.moonshot.cn）。");
@@ -60,11 +67,7 @@ namespace UnityMCP.AI
             var body = new ChatCompletionRequest
             {
                 model = modelId,
-                messages = new[]
-                {
-                    new ChatMessage { role = "system", content = systemPrompt },
-                    new ChatMessage { role = "user", content = userMessage }
-                },
+                messages = BuildOpenAiMessages(systemPrompt, priorTurns, userMessage),
                 temperature = ResolveRequestTemperature(modelId, _config.temperature),
                 max_tokens = _config.maxTokens
             };
@@ -164,6 +167,30 @@ namespace UnityMCP.AI
             request.SetRequestHeader("Authorization", $"Bearer {_config.apiKey}");
             request.timeout = 120;
             return SendRequestAsync(request);
+        }
+
+        private static ChatMessage[] BuildOpenAiMessages(
+            string systemPrompt,
+            IReadOnlyList<ChatMemoryTurn>? priorTurns,
+            string userMessage)
+        {
+            var list = new List<ChatMessage>
+            {
+                new() { role = "system", content = systemPrompt }
+            };
+
+            if (priorTurns != null)
+            {
+                foreach (var t in priorTurns)
+                {
+                    var r = (t.Role ?? "").Trim().ToLowerInvariant();
+                    if (r != "user" && r != "assistant") continue;
+                    list.Add(new ChatMessage { role = r, content = t.Content ?? "" });
+                }
+            }
+
+            list.Add(new ChatMessage { role = "user", content = userMessage });
+            return list.ToArray();
         }
 
         private static Task<string> SendRequestAsync(UnityWebRequest request)

@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -18,7 +19,8 @@ namespace UnityMCP.AI
             IAIService service,
             AIServiceConfig config,
             string systemPrompt,
-            string userMessage)
+            string userMessage,
+            IReadOnlyList<ChatMemoryTurn>? priorTurns = null)
         {
             var extra = Mathf.Clamp(config.requestRetries, 0, 6);
             var attempts = 1 + extra;
@@ -26,7 +28,7 @@ namespace UnityMCP.AI
 
             for (var attempt = 1; attempt <= attempts; attempt++)
             {
-                last = await service.SendMessageAsync(systemPrompt, userMessage);
+                last = await service.SendMessageAsync(systemPrompt, priorTurns, userMessage);
                 if (last.Success)
                     return last;
 

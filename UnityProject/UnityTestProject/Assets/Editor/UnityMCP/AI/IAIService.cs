@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace UnityMCP.AI
@@ -52,6 +53,14 @@ namespace UnityMCP.AI
         /// <param name="userMessage">用户消息</param>
         /// <returns>AI 响应</returns>
         Task<AIResponse> SendMessageAsync(string systemPrompt, string userMessage);
+
+        /// <summary>
+        /// 发送消息（含多轮记忆）。<paramref name="priorTurns"/> 为 system 之后、本轮 user 之前的 user/assistant 交替内容。
+        /// </summary>
+        Task<AIResponse> SendMessageAsync(
+            string systemPrompt,
+            IReadOnlyList<ChatMemoryTurn>? priorTurns,
+            string userMessage);
 
         /// <summary>
         /// 测试与 AI 服务的连接是否正常
