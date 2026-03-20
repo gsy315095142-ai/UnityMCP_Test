@@ -115,8 +115,10 @@ namespace UnityMCP.UI
         private float _combinedCodeGenTime;
         private int _combinedCodeTokens;
 
-        // UI 样式缓存
-        private GUIStyle? _userBubbleStyle;
+        // UI 样式缓存（聊天气泡）
+        private GUIStyle? _chatBubbleFrameStyle;
+        private GUIStyle? _chatTitleUserStyle;
+        private GUIStyle? _chatTitleAssistantStyle;
         private GUIStyle? _assistantBubbleStyle;
 
         #endregion
@@ -162,29 +164,96 @@ namespace UnityMCP.UI
 
         private void InitStyles()
         {
-            if (_userBubbleStyle == null)
+            if (_chatBubbleFrameStyle == null)
             {
-                _userBubbleStyle = new GUIStyle(EditorStyles.helpBox)
+                _chatBubbleFrameStyle = new GUIStyle(EditorStyles.helpBox)
                 {
-                    wordWrap = true,
-                    richText = true,
-                    fontSize = 13,
-                    padding = new RectOffset(10, 10, 10, 10),
-                    margin = new RectOffset(40, 10, 5, 5) // 靠右
+                    padding = new RectOffset(14, 14, 12, 14),
+                    margin = new RectOffset(4, 4, 6, 6)
                 };
+            }
+
+            if (_chatTitleUserStyle == null)
+            {
+                _chatTitleUserStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    richText = true,
+                    fontSize = 11,
+                    alignment = TextAnchor.MiddleRight,
+                    margin = new RectOffset(0, 0, 0, 4),
+                    padding = new RectOffset(0, 0, 0, 0)
+                };
+                _chatTitleUserStyle.normal.textColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.72f, 0.86f, 1f)
+                    : new Color(0.12f, 0.35f, 0.72f);
+            }
+
+            if (_chatTitleAssistantStyle == null)
+            {
+                _chatTitleAssistantStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    richText = true,
+                    fontSize = 11,
+                    alignment = TextAnchor.MiddleLeft,
+                    margin = new RectOffset(0, 0, 0, 4),
+                    padding = new RectOffset(0, 0, 0, 0)
+                };
+                _chatTitleAssistantStyle.normal.textColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.55f, 0.9f, 0.88f)
+                    : new Color(0.08f, 0.52f, 0.48f);
             }
 
             if (_assistantBubbleStyle == null)
             {
-                _assistantBubbleStyle = new GUIStyle(EditorStyles.helpBox)
+                _assistantBubbleStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
                 {
-                    wordWrap = true,
                     richText = true,
                     fontSize = 13,
-                    padding = new RectOffset(10, 10, 10, 10),
-                    margin = new RectOffset(10, 40, 5, 5) // 靠左
+                    wordWrap = true,
+                    margin = new RectOffset(0, 0, 2, 2),
+                    padding = new RectOffset(0, 0, 0, 0)
                 };
+                _assistantBubbleStyle.normal.textColor = EditorStyles.label.normal.textColor;
             }
+        }
+
+        /// <summary>用户消息气泡可用宽度（较大 MinWidth，避免竖条过长）</summary>
+        private float ChatUserBubbleMinWidth()
+        {
+            var max = ChatUserBubbleMaxWidth();
+            return Mathf.Clamp(max * 0.55f, 280f, max);
+        }
+
+        private float ChatUserBubbleMaxWidth()
+        {
+            var w = Mathf.Max(position.width, minSize.x);
+            return Mathf.Min(560f, (w - 56f) * 0.88f);
+        }
+
+        private float ChatAssistantBubbleMinWidth()
+        {
+            var max = ChatAssistantBubbleMaxWidth();
+            return Mathf.Clamp(max * 0.45f, 240f, max);
+        }
+
+        private float ChatAssistantBubbleMaxWidth()
+        {
+            var w = Mathf.Max(position.width, minSize.x);
+            return Mathf.Min(640f, (w - 40f) * 0.94f);
+        }
+
+        private static Color ChatUserBubbleTint()
+        {
+            return EditorGUIUtility.isProSkin
+                ? new Color(0.38f, 0.58f, 0.92f, 0.42f)
+                : new Color(0.86f, 0.93f, 1f, 1f);
+        }
+
+        private static Color ChatAssistantBubbleTint()
+        {
+            return EditorGUIUtility.isProSkin
+                ? new Color(0.48f, 0.55f, 0.58f, 0.38f)
+                : new Color(0.94f, 0.97f, 0.98f, 1f);
         }
 
         private void OnGUI()
@@ -267,25 +336,48 @@ namespace UnityMCP.UI
 
         private void DrawUserMessage(ChatMessage msg)
         {
+            InitStyles();
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
-            EditorGUILayout.BeginVertical(_userBubbleStyle!, GUILayout.MinWidth(100));
-            EditorGUILayout.LabelField($"<b>用户:</b>", _userBubbleStyle!);
-            EditorGUILayout.LabelField(msg.Content, _userBubbleStyle!);
+
+            var bg = GUI.backgroundColor;
+            GUI.backgroundColor = Color.Lerp(Color.white, ChatUserBubbleTint(), EditorGUIUtility.isProSkin ? 0.82f : 0.52f);
+
+            EditorGUILayout.BeginVertical(_chatBubbleFrameStyle!,
+                GUILayout.MaxWidth(ChatUserBubbleMaxWidth()),
+                GUILayout.MinWidth(ChatUserBubbleMinWidth()));
+            GUI.backgroundColor = bg;
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField("用户", _chatTitleUserStyle!, GUILayout.ExpandWidth(false));
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.LabelField(msg.Content, _assistantBubbleStyle!, GUILayout.ExpandWidth(true));
+
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
         }
 
         private void DrawAssistantMessage(ChatMessage msg)
         {
+            InitStyles();
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.BeginVertical(_assistantBubbleStyle!, GUILayout.MinWidth(200));
-            EditorGUILayout.LabelField($"<b>AI 助手:</b>", _assistantBubbleStyle!);
+
+            var bg = GUI.backgroundColor;
+            GUI.backgroundColor = Color.Lerp(Color.white, ChatAssistantBubbleTint(), EditorGUIUtility.isProSkin ? 0.82f : 0.5f);
+
+            EditorGUILayout.BeginVertical(_chatBubbleFrameStyle!,
+                GUILayout.MaxWidth(ChatAssistantBubbleMaxWidth()),
+                GUILayout.MinWidth(ChatAssistantBubbleMinWidth()));
+            GUI.backgroundColor = bg;
+
+            EditorGUILayout.LabelField("AI 助手", _chatTitleAssistantStyle!, GUILayout.ExpandWidth(false));
 
             switch (msg.Type)
             {
                 case MessageTypeEnum.Text:
-                    EditorGUILayout.LabelField(msg.Content, _assistantBubbleStyle!);
+                    EditorGUILayout.LabelField(msg.Content, _assistantBubbleStyle!, GUILayout.ExpandWidth(true));
                     if (msg.Content.Contains("⏳")) Repaint(); // 如果是等待中，刷新UI
                     break;
                 case MessageTypeEnum.CodeGenerated:
@@ -359,7 +451,7 @@ namespace UnityMCP.UI
         private void DrawCodeGeneratedState(ChatMessage msg)
         {
             string title = msg.Mode == GenerateMode.Combined ? "✅ <b>第 1 步完成</b>: 代码已生成！" : "✅ 代码已生成！";
-            EditorGUILayout.LabelField(title, _assistantBubbleStyle!);
+            EditorGUILayout.LabelField(title, _assistantBubbleStyle!, GUILayout.ExpandWidth(true));
             EditorGUILayout.LabelField($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
             
             EditorGUILayout.Space(5);
@@ -402,7 +494,7 @@ namespace UnityMCP.UI
         private void DrawPrefabGeneratedState(ChatMessage msg)
         {
             string title = msg.Mode == GenerateMode.Combined ? "✅ <b>第 2 步完成</b>: 预制体已生成！" : "✅ 预制体已生成！";
-            EditorGUILayout.LabelField(title, _assistantBubbleStyle!);
+            EditorGUILayout.LabelField(title, _assistantBubbleStyle!, GUILayout.ExpandWidth(true));
             EditorGUILayout.LabelField($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
 
             EditorGUILayout.Space(5);
@@ -456,7 +548,7 @@ namespace UnityMCP.UI
                 ? "🎉 联合生成最终完成！" 
                 : (msg.Mode == GenerateMode.Code ? "🎉 代码生成并保存成功！" : "🎉 预制体生成并保存成功！");
                 
-            EditorGUILayout.LabelField($"<b>{text}</b>", _assistantBubbleStyle!);
+            EditorGUILayout.LabelField($"<b>{text}</b>", _assistantBubbleStyle!, GUILayout.ExpandWidth(true));
             
             EditorGUILayout.Space(5);
 
@@ -497,7 +589,7 @@ namespace UnityMCP.UI
 
         private void DrawErrorState(ChatMessage msg)
         {
-            EditorGUILayout.LabelField("❌ <b>生成失败</b>", _assistantBubbleStyle!);
+            EditorGUILayout.LabelField("❌ <b>生成失败</b>", _assistantBubbleStyle!, GUILayout.ExpandWidth(true));
             EditorGUILayout.HelpBox(msg.ErrorMessage, MessageType.Error);
             
             EditorGUILayout.Space(5);
