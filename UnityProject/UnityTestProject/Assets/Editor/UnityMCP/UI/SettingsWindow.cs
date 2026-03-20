@@ -18,7 +18,14 @@ namespace UnityMCP.UI
         private bool _isTesting;
         private bool _showApiKey;
 
-        private static readonly string[] PROVIDER_NAMES = { "Ollama（本地模型）", "OpenAI", "Claude", "Azure OpenAI" };
+        private static readonly string[] PROVIDER_NAMES =
+        {
+            "Ollama（本地模型）",
+            "OpenAI",
+            "Claude",
+            "Azure OpenAI",
+            "月之暗面（Moonshot / Kimi）"
+        };
 
         [MenuItem("Window/AI 助手/设置 %#,", priority = 100)]
         public static void ShowWindow()
@@ -60,7 +67,8 @@ namespace UnityMCP.UI
         {
             EditorGUILayout.LabelField("AI 服务配置", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "配置 AI 服务连接信息。当前 Phase 1 仅支持 Ollama，其他服务商将在后续版本中支持。",
+                "配置 AI 服务连接信息。已支持：Ollama、月之暗面 Moonshot（Kimi，OpenAI 兼容接口）。\n" +
+                "OpenAI / Claude / Azure 仍为占位，后续接入。",
                 MessageType.Info);
         }
 
@@ -76,15 +84,23 @@ namespace UnityMCP.UI
 
                 if (newProvider != _config.provider)
                 {
-                    _config.provider = newProvider;
+                    _config.ApplyProviderDefaults(newProvider);
                     _testResult = "";
                 }
 
-                if (_config.provider != AIProvider.Ollama)
+                if (_config.provider is AIProvider.OpenAI or AIProvider.Claude or AIProvider.Azure)
                 {
                     EditorGUILayout.HelpBox(
-                        $"{PROVIDER_NAMES[(int)_config.provider]} 将在 Phase 2 中支持，当前请使用 Ollama。",
+                        $"{PROVIDER_NAMES[(int)_config.provider]} 暂未接入，请改用 Ollama 或月之暗面（Moonshot）。",
                         MessageType.Warning);
+                }
+                else if (_config.provider == AIProvider.Moonshot)
+                {
+                    EditorGUILayout.HelpBox(
+                        "请在 platform.moonshot.cn 创建 API Key。默认端点为中国区 https://api.moonshot.cn/v1；" +
+                        "国际区可改为 https://api.moonshot.ai/v1。\n" +
+                        $"默认模型：{MoonshotOpenAiService.DefaultModelKimiK25}（Kimi K2.5 系列，以控制台实际名称为准）。",
+                        MessageType.None);
                 }
             }
         }
@@ -97,7 +113,7 @@ namespace UnityMCP.UI
                 _config.customEndpoint = EditorGUILayout.TextField(
                     "API 端点", _config.customEndpoint);
 
-                if (_config.provider != AIProvider.Ollama)
+                if (_config.provider != AIProvider.Ollama) // Moonshot / OpenAI / … 均需 Key（当前仅 Moonshot 已实现）
                 {
                     EditorGUILayout.BeginHorizontal();
                     if (_showApiKey)
@@ -132,6 +148,13 @@ namespace UnityMCP.UI
                 {
                     EditorGUILayout.HelpBox(
                         "输入 Ollama 中已安装的模型名称，如 qwen3.5:35b、llama3:8b 等",
+                        MessageType.None);
+                }
+                else if (_config.provider == AIProvider.Moonshot)
+                {
+                    EditorGUILayout.HelpBox(
+                        $"切换为月之暗面时会自动填入默认模型 {MoonshotOpenAiService.DefaultModelKimiK25}；" +
+                        "若调用报错，请到开放平台核对当前可用的 model 名称并修改此处。",
                         MessageType.None);
                 }
             }

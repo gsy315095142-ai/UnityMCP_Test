@@ -14,7 +14,9 @@ namespace UnityMCP.AI
         Ollama = 0,
         OpenAI = 1,
         Claude = 2,
-        Azure = 3
+        Azure = 3,
+        /// <summary>月之暗面 Moonshot（Kimi），OpenAI 兼容接口</summary>
+        Moonshot = 4
     }
 
     /// <summary>
@@ -65,9 +67,10 @@ namespace UnityMCP.AI
             return provider switch
             {
                 AIProvider.Ollama => "http://localhost:11434",
-                AIProvider.OpenAI => "https://api.openai.com",
+                AIProvider.OpenAI => "https://api.openai.com/v1",
                 AIProvider.Claude => "https://api.anthropic.com",
                 AIProvider.Azure => "",
+                AIProvider.Moonshot => MoonshotOpenAiService.DefaultBaseUrl,
                 _ => ""
             };
         }
@@ -86,8 +89,40 @@ namespace UnityMCP.AI
                 AIProvider.OpenAI => "gpt-4o",
                 AIProvider.Claude => "claude-3-5-sonnet-20241022",
                 AIProvider.Azure => "gpt-4o",
+                AIProvider.Moonshot => MoonshotOpenAiService.DefaultModelKimiK25,
                 _ => ""
             };
+        }
+
+        /// <summary>
+        /// 切换服务商时写入该厂商常用的 API 根路径与默认模型（会覆盖端点与模型输入框）。
+        /// </summary>
+        public void ApplyProviderDefaults(AIProvider newProvider)
+        {
+            provider = newProvider;
+            switch (newProvider)
+            {
+                case AIProvider.Ollama:
+                    customEndpoint = "http://192.168.0.34:11434";
+                    modelName = "qwen3.5:35b";
+                    break;
+                case AIProvider.Moonshot:
+                    customEndpoint = MoonshotOpenAiService.DefaultBaseUrl;
+                    modelName = MoonshotOpenAiService.DefaultModelKimiK25;
+                    break;
+                case AIProvider.OpenAI:
+                    customEndpoint = "https://api.openai.com/v1";
+                    modelName = "gpt-4o";
+                    break;
+                case AIProvider.Claude:
+                    customEndpoint = "https://api.anthropic.com";
+                    modelName = "claude-3-5-sonnet-20241022";
+                    break;
+                case AIProvider.Azure:
+                    customEndpoint = "";
+                    modelName = "gpt-4o";
+                    break;
+            }
         }
 
         /// <summary>

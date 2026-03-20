@@ -22,7 +22,7 @@ namespace UnityMCP.UI
                 "快捷键:\n" +
                 "  Ctrl+Shift+.  LumiAI操控\n" +
                 "  Ctrl+Shift+,  打开设置\n\n" +
-                "当前支持: Ollama 本地模型\n" +
+                "当前支持: Ollama 本地模型、月之暗面 Moonshot（Kimi）\n" +
                 "计划支持: Claude, OpenAI, Azure",
                 "确定");
         }

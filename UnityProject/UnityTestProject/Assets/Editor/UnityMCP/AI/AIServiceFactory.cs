@@ -21,12 +21,13 @@ namespace UnityMCP.AI
             return config.provider switch
             {
                 AIProvider.Ollama => new OllamaService(config),
+                AIProvider.Moonshot => new MoonshotOpenAiService(config),
                 AIProvider.OpenAI => throw new NotSupportedException(
-                    "OpenAI 服务将在 Phase 2 实现，当前请使用 Ollama。"),
+                    "OpenAI 服务将在后续版本实现，请使用 Ollama 或月之暗面（Moonshot）。"),
                 AIProvider.Claude => throw new NotSupportedException(
-                    "Claude 服务将在 Phase 2 实现，当前请使用 Ollama。"),
+                    "Claude 服务将在后续版本实现，请使用 Ollama 或月之暗面（Moonshot）。"),
                 AIProvider.Azure => throw new NotSupportedException(
-                    "Azure OpenAI 服务将在 Phase 2 实现，当前请使用 Ollama。"),
+                    "Azure OpenAI 服务将在后续版本实现，请使用 Ollama 或月之暗面（Moonshot）。"),
                 _ => throw new NotSupportedException($"未知的 AI 服务商: {config.provider}")
             };
         }
