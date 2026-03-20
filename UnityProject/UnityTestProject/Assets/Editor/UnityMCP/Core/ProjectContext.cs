@@ -46,6 +46,17 @@ namespace UnityMCP.Core
         }
 
         /// <summary>
+        /// 场景操控（unity-ops）等场景的轻量摘要：避免把完整脚本列表塞进 Prompt。
+        /// </summary>
+        public string ToPromptContextSceneOpsBrief()
+        {
+            return $@"## 项目摘要（场景操控）
+- Unity {UnityVersion}，渲染管线: {RenderPipeline}
+- 默认命名空间: {DefaultNamespace}；脚本目录: {ScriptOutputPath}；预制体目录: {PrefabOutputPath}
+- 工程中已有脚本类名约 {ExistingScripts.Count} 个（操控层级时若需自定义组件，勿与现有类名冲突）";
+        }
+
+        /// <summary>
         /// 生成用于 AI Prompt 的上下文文本
         /// </summary>
         public string ToPromptContext()

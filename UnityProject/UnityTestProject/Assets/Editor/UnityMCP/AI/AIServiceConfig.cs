@@ -43,6 +43,14 @@ namespace UnityMCP.AI
         [Tooltip("最大生成 Token 数")]
         public int maxTokens = 4000;
 
+        [Tooltip("请求失败时额外重试次数（不含首次）。可用于网络抖动或 Ollama 短暂无响应。")]
+        [Range(0, 6)]
+        public int requestRetries = 2;
+
+        [Tooltip("重试等待基数（秒），第 n 次重试约等待 n×该值。")]
+        [Range(0.2f, 10f)]
+        public float requestRetryDelaySeconds = 1.25f;
+
         private const string PREFS_KEY = "UnityMCP_AIServiceConfig";
         private const string API_KEY_PREFS_KEY = "UnityMCP_APIKey_Encrypted";
 
@@ -157,6 +165,8 @@ namespace UnityMCP.AI
             customEndpoint = "http://192.168.0.34:11434";
             temperature = 0.7f;
             maxTokens = 4000;
+            requestRetries = 2;
+            requestRetryDelaySeconds = 1.25f;
         }
     }
 }

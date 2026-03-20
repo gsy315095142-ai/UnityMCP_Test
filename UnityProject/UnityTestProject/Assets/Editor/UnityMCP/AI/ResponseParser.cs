@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityMCP.Generators;
@@ -63,7 +64,14 @@ namespace UnityMCP.AI
     public static class ResponseParser
     {
         private static readonly Regex CodeBlockRegex = new(
-            @"```(?:csharp|cs)\s*\n([\s\S]*?)```",
+            @"```(?:csharp|cs)\s*\n?([\s\S]*?)```",
+            RegexOptions.Compiled | RegexOptions.Multiline);
+
+        /// <summary>
+        /// 无语言标记的围栏，仅在内容像 C# 时使用，避免误吞 JSON。
+        /// </summary>
+        private static readonly Regex PlainCodeFenceRegex = new(
+            @"```\s*\n?([\s\S]*?)```",
             RegexOptions.Compiled | RegexOptions.Multiline);
 
         private static readonly Regex ClassNameRegex = new(
@@ -75,7 +83,7 @@ namespace UnityMCP.AI
             RegexOptions.Compiled);
 
         private static readonly Regex JsonBlockRegex = new(
-            @"```(?:json)\s*\n([\s\S]*?)```",
+            @"```(?:json)?\s*\n?([\s\S]*?)```",
             RegexOptions.Compiled | RegexOptions.Multiline);
 
         private static readonly Regex ThinkBlockRegex = new(
@@ -90,7 +98,7 @@ namespace UnityMCP.AI
         }
 
         /// <summary>
-        /// 从 AI 返回文本中解析生成意图（代码 / 预制体 / 联合）。
+        /// 从 AI 返回文本中解析生成意图（代码 / 预制体 / 联合 / 场景操控）。
         /// </summary>
         public static GenerationIntentResult ParseGenerationIntent(string aiContent)
         {
@@ -110,6 +118,8 @@ namespace UnityMCP.AI
                     content);
             }
 
+            jsonText = NormalizeGenerationIntentJsonKeys(jsonText);
+
             GenerationIntentJson? parsed;
             try
             {
@@ -127,7 +137,7 @@ namespace UnityMCP.AI
             if (route == null)
             {
                 return GenerationIntentResult.Fail(
-                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both。",
+                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both / sceneOps。",
                     jsonText);
             }
 
@@ -144,10 +154,12 @@ namespace UnityMCP.AI
                 "code" or "script" or "csharp" or "cs" => GenerationRoute.Code,
                 "prefab" or "prefabrication" or "gameobject" => GenerationRoute.Prefab,
                 "both" or "combined" or "all" or "codeandprefab" or "prefabandcode" => GenerationRoute.Both,
+                "sceneops" or "sceneop" or "hierarchyedit" or "unitysceneops" => GenerationRoute.SceneOps,
                 // 常见中文返回值（本地模型）
                 "代码" or "脚本" or "csharp脚本" => GenerationRoute.Code,
                 "预制体" or "预设" => GenerationRoute.Prefab,
                 "联合" or "两者" or "都要" or "代码和预制体" or "脚本和预制体" => GenerationRoute.Both,
+                "场景操控" or "场景操作" or "编辑场景" or "hierarchy操作" => GenerationRoute.SceneOps,
                 _ => null
             };
         }
@@ -192,6 +204,23 @@ namespace UnityMCP.AI
             return null;
         }
 
+        private static string NormalizeGenerationIntentJsonKeys(string json)
+        {
+            var s = json.Trim();
+            if (s.Length > 0 && s[0] == '\uFEFF')
+                s = s.Substring(1);
+            s = Regex.Replace(s, @"(?i)""generationtarget""\s*:", "\"generationTarget\":");
+            s = Regex.Replace(s, @"(?i)""codetype""\s*:", "\"codeType\":");
+            for (var i = 0; i < 6; i++)
+            {
+                var n = Regex.Replace(s, @",(\s*[\]}])", "$1");
+                if (n == s) break;
+                s = n;
+            }
+
+            return s;
+        }
+
         /// <summary>
         /// 从 AI 响应中解析代码生成结果
         /// </summary>
@@ -212,16 +241,16 @@ namespace UnityMCP.AI
 
             var code = ExtractCodeBlock(content);
             if (string.IsNullOrEmpty(code))
-            {
+                code = TryExtractPlainFenceAsCSharp(content);
+            if (string.IsNullOrEmpty(code))
                 code = TryExtractRawCode(content);
-            }
 
             if (string.IsNullOrEmpty(code))
             {
                 return new CodeGenerationResult
                 {
                     Success = false,
-                    Error = "无法从 AI 响应中提取代码块。请确保 AI 返回了 ```csharp 格式的代码。",
+                    Error = "无法从 AI 响应中提取 C# 代码。\n\n" + BuildCodeParseHints(),
                     Code = content
                 };
             }
@@ -234,7 +263,7 @@ namespace UnityMCP.AI
                 return new CodeGenerationResult
                 {
                     Success = false,
-                    Error = "无法从代码中提取类名，请确保代码包含有效的 class 定义。",
+                    Error = "无法从代码中提取类名。请确保包含有效的 `public class 类名` 定义。\n\n" + BuildCodeParseHints(),
                     Code = code
                 };
             }
@@ -281,6 +310,29 @@ namespace UnityMCP.AI
             return bestMatch;
         }
 
+        private static string? TryExtractPlainFenceAsCSharp(string content)
+        {
+            var matches = PlainCodeFenceRegex.Matches(content);
+            string? best = null;
+            var bestScore = 0;
+            foreach (Match match in matches)
+            {
+                var body = match.Groups[1].Value.Trim();
+                if (string.IsNullOrEmpty(body) || body.StartsWith("{")) continue;
+                var score = 0;
+                if (body.Contains("using ")) score += 2;
+                if (body.Contains("class ")) score += 3;
+                if (body.Contains("namespace ")) score += 1;
+                if (score >= 5 && body.Length > bestScore)
+                {
+                    bestScore = body.Length;
+                    best = body;
+                }
+            }
+
+            return best;
+        }
+
         /// <summary>
         /// 当没有代码块标记时，尝试直接提取代码内容
         /// （用于 AI 直接输出代码而未使用 Markdown 格式的情况）
@@ -313,6 +365,46 @@ namespace UnityMCP.AI
             return match.Success ? match.Groups[1].Value : null;
         }
 
+        /// <summary>
+        /// 从模型输出中提取 JSON 文本（场景操控 <c>unity-ops</c>、意图路由等通用逻辑）：
+        /// 优先 <c>```json</c> 代码块；否则整段花括号对象；否则从文中切出包含关键字段的平衡括号对象。
+        /// </summary>
+        public static string? ExtractJsonFromModelOutput(string? content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+                return null;
+
+            var stripped = ThinkBlockRegex.Replace(content, "").Trim();
+            var block = ExtractJsonBlock(stripped);
+            if (!string.IsNullOrEmpty(block))
+                return block.Trim();
+
+            var t = stripped.Trim();
+            if (t.StartsWith("{", StringComparison.Ordinal) && t.EndsWith("}", StringComparison.Ordinal))
+                return t;
+
+            return TryExtractBalancedJsonContainingKey(stripped, "unityOpsVersion")
+                   ?? TryExtractBalancedJsonContainingKey(stripped, "operations");
+        }
+
+        private static string? TryExtractBalancedJsonContainingKey(string content, string key)
+        {
+            var needle = "\"" + key + "\"";
+            var idx = content.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+                return null;
+
+            var start = content.LastIndexOf('{', idx);
+            if (start < 0)
+                return null;
+
+            var end = PrefabJsonSanitizer.FindMatchingClosingBrace(content, start);
+            if (end < 0)
+                return null;
+
+            return content.Substring(start, end - start + 1).Trim();
+        }
+
         #region 预制体 JSON 解析
 
         /// <summary>
@@ -331,14 +423,14 @@ namespace UnityMCP.AI
 
             var jsonText = ExtractJsonBlock(content);
             if (string.IsNullOrEmpty(jsonText))
-            {
                 jsonText = TryExtractRawJson(content);
-            }
+            if (string.IsNullOrEmpty(jsonText))
+                jsonText = TryExtractLargestPrefabLikeJson(content);
 
             if (string.IsNullOrEmpty(jsonText))
             {
                 return PrefabParseResult.Fail(
-                    "无法从 AI 响应中提取 JSON 块。请确保 AI 返回了 ```json 格式的内容。",
+                    "无法从 AI 响应中提取预制体 JSON。\n\n" + BuildPrefabExtractFailureHints(),
                     content);
             }
 
@@ -347,7 +439,9 @@ namespace UnityMCP.AI
                 var description = ParsePrefabJson(jsonText);
                 if (description == null)
                 {
-                    return PrefabParseResult.Fail("JSON 解析结果为空", jsonText);
+                    return PrefabParseResult.Fail(
+                        "JSON 结构化失败（解析结果为空）。\n\n" + BuildPrefabParseHints(jsonText),
+                        jsonText);
                 }
 
                 if (string.IsNullOrWhiteSpace(description.prefabName))
@@ -355,11 +449,16 @@ namespace UnityMCP.AI
                     description.prefabName = description.rootObject?.name ?? "NewPrefab";
                 }
 
+                if (string.IsNullOrWhiteSpace(description.prefabName))
+                    description.prefabName = "NewPrefab";
+
                 return PrefabParseResult.Ok(description, jsonText);
             }
             catch (Exception ex)
             {
-                return PrefabParseResult.Fail($"JSON 解析失败: {ex.Message}", jsonText);
+                return PrefabParseResult.Fail(
+                    $"JSON 解析异常: {ex.Message}\n\n{BuildPrefabParseHints(jsonText)}",
+                    jsonText);
             }
         }
 
@@ -400,13 +499,80 @@ namespace UnityMCP.AI
         }
 
         /// <summary>
+        /// 从正文中找出最像预制体定义的 {...} 片段（成对花括号、含 prefabName/rootObject/components 之一）。
+        /// </summary>
+        private static string? TryExtractLargestPrefabLikeJson(string content)
+        {
+            string? best = null;
+            var bestLen = -1;
+            for (var i = 0; i < content.Length; i++)
+            {
+                if (content[i] != '{') continue;
+                var end = PrefabJsonSanitizer.FindMatchingClosingBrace(content, i);
+                if (end < 0 || end - i < 10) continue;
+                var slice = content.Substring(i, end - i + 1);
+                if (!SliceLooksLikePrefabJson(slice)) continue;
+                var len = slice.Length;
+                if (len > bestLen)
+                {
+                    bestLen = len;
+                    best = slice;
+                }
+            }
+
+            return best;
+        }
+
+        private static bool SliceLooksLikePrefabJson(string slice)
+        {
+            return slice.IndexOf("prefabName", StringComparison.OrdinalIgnoreCase) >= 0
+                   || slice.IndexOf("rootObject", StringComparison.OrdinalIgnoreCase) >= 0
+                   || slice.Contains("\"components\"", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildPrefabExtractFailureHints() =>
+            "建议：\n" +
+            "· 请模型只输出一个 ```json 代码块，根字段包含 prefabName 与 rootObject；\n" +
+            "· rootObject 内使用 name、components、children；每个组件含 type 与 properties 对象；\n" +
+            "· 若仍失败，可改用「生成预制体」模式并缩短需求描述，减少模型发挥空间。";
+
+        private static string BuildPrefabParseHints(string? rawSnippet)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("可执行的检查项：");
+            sb.AppendLine("· 根级字段：prefabName（字符串）、rootObject（对象）；");
+            sb.AppendLine("· 组件：{\"type\":\"Rigidbody\",\"properties\":{\"mass\":\"1\"}}，属性值尽量用字符串；");
+            sb.AppendLine("· 不要有尾逗号、不要用单引号包裹键名；");
+            sb.AppendLine("· 中文项目下若类名脚本将挂在预制体上，type 填脚本类名。");
+            if (!string.IsNullOrEmpty(rawSnippet) && rawSnippet.Length > 600)
+                sb.AppendLine("· 原始 JSON 较长，请用「预览 JSON」查看截取前的完整内容。");
+            return sb.ToString().TrimEnd();
+        }
+
+        private static string BuildCodeParseHints() =>
+            "建议：\n" +
+            "· 使用 ```csharp 包裹完整的一个 .cs 文件；\n" +
+            "· 包含 public class 类名 与命名空间（如需）；\n" +
+            "· 本地模型可多试一次，或在设置中略降 Temperature。";
+
+        /// <summary>
         /// 手动解析预制体 JSON（使用 Unity 的 JsonUtility 结合手动处理）。
         /// JsonUtility 不支持 Dictionary，因此组件属性需要特殊处理。
         /// </summary>
         private static PrefabDescription? ParsePrefabJson(string jsonText)
         {
-            var wrapper = JsonUtility.FromJson<PrefabDescriptionRaw>(jsonText);
-            if (wrapper == null) return null;
+            var sanitized = PrefabJsonSanitizer.Sanitize(jsonText);
+
+            PrefabDescriptionRaw wrapper;
+            try
+            {
+                wrapper = JsonUtility.FromJson<PrefabDescriptionRaw>(sanitized);
+            }
+            catch
+            {
+                var fallback = TryPrefabFromFlatGameObjectOnly(sanitized);
+                return fallback;
+            }
 
             var result = new PrefabDescription
             {
@@ -417,8 +583,44 @@ namespace UnityMCP.AI
             {
                 result.rootObject = ConvertGameObjectDesc(wrapper.rootObject);
             }
+            else
+            {
+                var flatCandidate = JsonUtility.FromJson<GameObjectDescriptionRaw>(sanitized);
+                if (LooksLikeGameObjectNode(flatCandidate))
+                {
+                    result.rootObject = ConvertGameObjectDesc(flatCandidate);
+                    if (string.IsNullOrEmpty(result.prefabName))
+                        result.prefabName = flatCandidate.name ?? "GeneratedPrefab";
+                }
+                else
+                {
+                    result.rootObject = new GameObjectDescription
+                    {
+                        name = string.IsNullOrWhiteSpace(result.prefabName) ? "Root" : result.prefabName
+                    };
+                }
+            }
 
             return result;
+        }
+
+        private static bool LooksLikeGameObjectNode(GameObjectDescriptionRaw? g) =>
+            g != null && (
+                !string.IsNullOrEmpty(g.name)
+                || (g.components != null && g.components.Count > 0)
+                || (g.children != null && g.children.Count > 0));
+
+        private static PrefabDescription? TryPrefabFromFlatGameObjectOnly(string sanitized)
+        {
+            var flat = JsonUtility.FromJson<GameObjectDescriptionRaw>(sanitized);
+            if (!LooksLikeGameObjectNode(flat))
+                return null;
+
+            return new PrefabDescription
+            {
+                prefabName = flat.name ?? "GeneratedPrefab",
+                rootObject = ConvertGameObjectDesc(flat)
+            };
         }
 
         private static GameObjectDescription ConvertGameObjectDesc(GameObjectDescriptionRaw raw)

@@ -1,6 +1,8 @@
 #nullable enable
 
+using UnityEngine.SceneManagement;
 using UnityMCP.Core;
+using UnityMCP.Tools;
 
 namespace UnityMCP.AI
 {
@@ -11,7 +13,9 @@ namespace UnityMCP.AI
     {
         Code = 0,
         Prefab = 1,
-        Both = 2
+        Both = 2,
+        /// <summary>当前活动场景内层级操控（unity-ops JSON）</summary>
+        SceneOps = 3
     }
 
     /// <summary>
@@ -34,6 +38,121 @@ namespace UnityMCP.AI
         private static readonly string[] CODE_TYPE_LABELS = { "自动检测", "MonoBehaviour", "ScriptableObject", "Manager 单例" };
         public static string[] CodeTypeLabels => CODE_TYPE_LABELS;
 
+        /// <summary>预制体 JSON 的简短 Few-shot（Phase 2-B，稳住 Qwen 等本地模型格式）。</summary>
+        private const string PrefabFormatFewShot = @"
+## 结构示例（字段名区分大小写，与本示例一致）
+用户：做一个静止的立方体道具
+应输出类似：
+```json
+{
+  ""prefabName"": ""StaticCube"",
+  ""rootObject"": {
+    ""name"": ""CubeRoot"",
+    ""tag"": ""Untagged"",
+    ""active"": true,
+    ""position"": [0, 0, 0],
+    ""rotation"": [0, 0, 0],
+    ""scale"": [1, 1, 1],
+    ""components"": [
+      { ""type"": ""BoxCollider"", ""properties"": { ""isTrigger"": ""false"" } }
+    ],
+    ""children"": []
+  }
+}
+```
+";
+
+        private const string CodeFormatFewShot = @"
+## 输出示例（仅演示围栏与类结构，不要照抄类名）
+```csharp
+using UnityEngine;
+
+namespace Game.Generated
+{
+    /// <summary>
+    /// 示例组件
+    /// </summary>
+    public class ExampleSpin : MonoBehaviour
+    {
+        #region Fields
+        [SerializeField] private float speed = 90f;
+        #endregion
+
+        #region Unity Methods
+        private void Update()
+        {
+            transform.Rotate(0f, speed * Time.deltaTime, 0f);
+        }
+        #endregion
+    }
+}
+```
+";
+
+        private const string IntentRouteFewShot = @"
+## 路由输出示例
+```json
+{
+  ""generationTarget"": ""prefab"",
+  ""codeType"": ""auto""
+}
+```
+
+场景层级 / 当前场景内改物体 → sceneOps：
+```json
+{
+  ""generationTarget"": ""sceneOps"",
+  ""codeType"": ""auto""
+}
+```
+";
+
+        private const string SceneOpsFormatFewShot = @"
+## unity-ops 示例 1：建空物体并加碰撞体、改本地坐标
+用户：在场景根下建一个空物体 Doorway，加个 BoxCollider，本地位置设为原点上方 1 米
+应输出类似：
+```json
+{
+  ""unityOpsVersion"": 1,
+  ""operations"": [
+    { ""op"": ""createEmpty"", ""name"": ""Doorway"", ""parentPath"": """" },
+    { ""op"": ""addComponent"", ""path"": ""Doorway"", ""typeName"": ""BoxCollider"" },
+    { ""op"": ""setTransform"", ""path"": ""Doorway"", ""localPosition"": ""0,1,0"" }
+  ]
+}
+```
+
+## unity-ops 示例 2：设父节点到选中物体
+用户：把层级路径 Props/Crate 挂到当前选中的物体下面（保持世界坐标）
+应输出类似：
+```json
+{
+  ""unityOpsVersion"": 1,
+  ""operations"": [
+    { ""op"": ""setParent"", ""path"": ""Props/Crate"", ""newParentPath"": ""__selection__"", ""worldPositionStays"": true }
+  ]
+}
+```
+
+## unity-ops 示例 3：实例化预制体
+用户：把 Assets/Prefabs/Generated/Enemy.prefab 实例化到 Combat/Spawns 下，缩放 1.2 倍
+应输出类似：
+```json
+{
+  ""unityOpsVersion"": 1,
+  ""operations"": [
+    { ""op"": ""instantiatePrefab"", ""prefabAssetPath"": ""Assets/Prefabs/Generated/Enemy.prefab"", ""parentPath"": ""Combat/Spawns"", ""localScale"": ""1.2,1.2,1.2"" }
+  ]
+}
+```
+";
+
+        private const string LocalModelDiscipline = @"
+## 本地模型（Ollama / Qwen / Llama 等）必读
+- 只输出要求的**一个**代码块或 JSON 块，块外不要写任何解释（不要用 Markdown 标题复述需求）。
+- JSON 中键名使用半角双引号；尽量**不要尾逗号**；布尔与数字在 properties 内也建议写成字符串（如 ""true""、""1.5""）以减少解析歧义。
+";
+
         #region AI 意图路由（判断生成代码 / 预制体 / 联合）
 
         /// <summary>
@@ -44,15 +163,20 @@ namespace UnityMCP.AI
             return $@"你是 Unity 编辑器插件中的「意图路由」模块。根据用户一句自然语言，判断本次应执行哪一种生成任务。
 只输出一个 JSON 对象，并且必须用 ```json 代码块包裹。不要输出其他任何文字。
 
+{LocalModelDiscipline}
+
+{IntentRouteFewShot}
+
 JSON 格式（字段名必须一致）：
 {{
-  ""generationTarget"": ""code"" | ""prefab"" | ""both"",
+  ""generationTarget"": ""code"" | ""prefab"" | ""both"" | ""sceneOps"",
   ""codeType"": ""auto"" | ""monobehaviour"" | ""scriptableobject"" | ""manager""
 }}
 
 判断规则（generationTarget）：
 - ""code""：用户主要需要 C# 脚本、类、逻辑、算法、配置数据类型（ScriptableObject）说明但仍在代码层面；或明确只要脚本不要预制体。
-- ""prefab""：用户主要描述场景对象 / UI 层级 / 物体结构 / 组件组合，且没有表达需要新建自定义脚本（或仅需要内置组件）。
+- ""prefab""：用户主要描述**生成预制体资源（Prefab 资产）**、可被保存到 Project 的物体模板；或明确要「做成 prefab 文件」。
+- ""sceneOps""：用户要在**当前正在编辑的场景**里直接改层级：创建空物体、改父节点、挂内置组件、改 Transform、把已有 .prefab **实例化进场景**；强调「放到场景里」「当前场景」「Hierarchy」而非新建 prefab 资产。
 - ""both""：用户同时需要「新脚本逻辑」和「可被实例化的预制体」，例如：带移动脚本的玩家预制体、挂接自定义 MonoBehaviour 的道具、需要挂载刚生成脚本的物体等。
 
 codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""auto""）：
@@ -77,6 +201,97 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 
         #endregion
 
+        #region 场景操控 Prompt（unity-ops / A.3）
+
+        /// <summary>
+        /// 当前活动场景名，供 <see cref="BuildSceneOpsUserPrompt"/> 使用；无效场景时返回空字符串。
+        /// </summary>
+        public static string GetActiveSceneNameForPrompt()
+        {
+            var scene = SceneManager.GetActiveScene();
+            if (!scene.IsValid())
+                return "";
+            return string.IsNullOrEmpty(scene.name) ? scene.path : scene.name;
+        }
+
+        /// <summary>
+        /// 构建「仅输出 unity-ops JSON」的系统 Prompt：允许的 op、路径约定、Few-shot。
+        /// 项目上下文使用轻量摘要，避免附带完整脚本列表。
+        /// </summary>
+        public static string BuildSceneOpsSystemPrompt(ProjectContext context)
+        {
+            return $@"你是 Unity 编辑器插件中的「场景操控」模块。根据用户自然语言，输出**可被执行的 unity-ops JSON**，用于在当前活动场景中按顺序创建/调整物体。
+只输出**一个** JSON 对象，并且必须用 ```json 代码块包裹。不要输出代码块外的任何文字。
+
+{LocalModelDiscipline}
+
+{SceneOpsFormatFewShot}
+
+## JSON 根对象（字段名必须一致）
+- ""unityOpsVersion"": 整数，必须为 {SceneOpsParser.SupportedVersion}
+- ""operations"": 数组，按顺序执行；任一步失败则整批中止
+
+## 每一步操作 operations[] 的通用字段
+- ""op"": 字符串，见下表**允许取值**（大小写不敏感，可用 snake_case，如 create_empty）
+- 未使用的字段可省略或留空字符串
+
+## 允许的 op 与专用字段
+| op | 说明 | 必填字段 |
+|----|------|----------|
+| createEmpty | 新建空 GameObject | name；parentPath 可选（空=场景根） |
+| setParent | 修改父节点 | path（被移动的物体层级路径）；newParentPath（新父路径或 __selection__）；worldPositionStays 可选，默认 false |
+| addComponent | 挂组件（内置或工程内脚本，短名或全名） | path；typeName |
+| setTransform | 改本地 Transform | path；localPosition / localEulerAngles / localScale 至少一项，格式 ""x,y,z""（逗号分隔） |
+| instantiatePrefab | 实例化预制体 | prefabAssetPath（须为 Assets/ 下 .prefab）；parentPath 可选；本地位姿字段同上可选 |
+
+## 路径规则（与插件解析一致）
+- **层级路径 path**：从**活动场景根**下第一级子物体名开始，用英文斜杠拼接，如 Canvas/Panel/BtnOk；每一级取**同名第一个**子物体。
+- **parentPath / newParentPath**：同上规则；留空或省略表示**场景根**下创建/实例化。
+- **__selection__**：表示使用当前在 Hierarchy 中选中的 GameObject 作为父节点（用户必须已选中一个物体）。
+- **prefabAssetPath**：必须以 Assets/ 开头，以 .prefab 结尾，禁止 "".."" 段。
+
+## 注意
+- 不要输出 C# 或预制体 JSON（prefabName/rootObject 那套）；本任务**只输出 unity-ops**。
+- 若需求含糊，做**最小安全**操作并少步完成；不要臆造不存在的预制体路径。
+- 向量与欧拉角字符串使用**英文逗号**，不要额外空格也可（插件按 InvariantCulture 解析）。
+
+{context.ToPromptContextSceneOpsBrief()}";
+        }
+
+        /// <summary>
+        /// 场景操控的用户 Prompt：附带当前活动场景名；可选再附一段项目摘要（与系统 Prompt 二选一或叠加简短提醒）。
+        /// </summary>
+        /// <param name="userRequest">用户自然语言需求</param>
+        /// <param name="activeSceneName">当前活动场景名（含 .unity 与否均可，仅作说明）</param>
+        /// <param name="appendProjectBrief">为 true 时在用户消息末尾追加 <see cref="ProjectContext.ToPromptContextSceneOpsBrief"/>（若系统消息已含完整摘要可传 false）</param>
+        /// <param name="projectContext">当 <paramref name="appendProjectBrief"/> 为 true 时使用；为 null 时内部 <see cref="ProjectContext.Collect"/></param>
+        public static string BuildSceneOpsUserPrompt(
+            string userRequest,
+            string activeSceneName,
+            bool appendProjectBrief = false,
+            ProjectContext? projectContext = null)
+        {
+            var sceneLine = string.IsNullOrWhiteSpace(activeSceneName)
+                ? "（未能读取活动场景名，仍请仅输出 unity-ops JSON。）"
+                : activeSceneName.Trim();
+
+            var body = $@"## 当前活动场景
+{sceneLine}
+
+## 用户需求（原文）
+{userRequest}
+
+请只输出一个 ```json 代码块（unity-ops），不要添加解释。";
+
+            if (!appendProjectBrief)
+                return body;
+
+            var ctx = projectContext ?? ProjectContext.Collect();
+            return body + "\n\n" + ctx.ToPromptContextSceneOpsBrief();
+        }
+
+        #endregion
+
         #region 代码生成 Prompt
 
         /// <summary>
@@ -93,6 +308,10 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
             };
 
             return $@"你是一个专业的 Unity C# 代码生成助手。请根据用户的需求生成高质量的 C# 代码。
+
+{LocalModelDiscipline}
+
+{CodeFormatFewShot}
 
 ## 输出规则（必须严格遵守）
 1. 只输出一个完整的 C# 源文件，用 ```csharp 和 ``` 包裹
@@ -173,6 +392,10 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
         public static string BuildPrefabSystemPrompt(ProjectContext context)
         {
             return $@"你是一个专业的 Unity 预制体生成助手。请根据用户的需求描述，输出 JSON 格式的预制体定义。
+
+{LocalModelDiscipline}
+
+{PrefabFormatFewShot}
 
 ## 输出格式（必须严格遵守）
 用 ```json 和 ``` 包裹输出，格式如下：

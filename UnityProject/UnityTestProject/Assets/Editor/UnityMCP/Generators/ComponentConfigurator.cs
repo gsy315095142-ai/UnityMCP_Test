@@ -105,6 +105,11 @@ namespace UnityMCP.Generators
         private static readonly Dictionary<string, Type?> _resolveCache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// 按与 <see cref="AddAndConfigure"/> 相同的规则解析组件类型（供场景操控工具等复用）。
+        /// </summary>
+        public static Type? ResolveComponentTypeForTools(string typeName) => ResolveType(typeName);
+
+        /// <summary>
         /// 根据组件描述向 GameObject 添加组件并设置属性
         /// </summary>
         public static ComponentResult AddAndConfigure(GameObject go, ComponentDescription desc)

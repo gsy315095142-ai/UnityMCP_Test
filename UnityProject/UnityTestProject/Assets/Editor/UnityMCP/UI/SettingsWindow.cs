@@ -150,6 +150,16 @@ namespace UnityMCP.UI
 
                 _config.maxTokens = EditorGUILayout.IntSlider(
                     "最大 Token 数", _config.maxTokens, 512, 16384);
+
+                EditorGUILayout.Space(6);
+                EditorGUILayout.LabelField("稳定性（Phase 2-B）", EditorStyles.boldLabel);
+                _config.requestRetries = EditorGUILayout.IntSlider(
+                    "失败自动重试次数", _config.requestRetries, 0, 6);
+                EditorGUILayout.HelpBox(
+                    "不含首次请求。仅对超时、连接失败、5xx、429 等瞬时错误重试。",
+                    MessageType.None);
+                _config.requestRetryDelaySeconds = EditorGUILayout.Slider(
+                    "重试间隔基数（秒）", _config.requestRetryDelaySeconds, 0.25f, 6f);
             }
         }
 
