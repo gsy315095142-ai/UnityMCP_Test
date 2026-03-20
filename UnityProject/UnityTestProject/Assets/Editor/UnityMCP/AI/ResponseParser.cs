@@ -9,6 +9,33 @@ using UnityMCP.Generators;
 namespace UnityMCP.AI
 {
     /// <summary>
+    /// 解析「AI 判断」路由阶段返回的 JSON 后的结果。
+    /// </summary>
+    public sealed class GenerationIntentResult
+    {
+        public bool Success { get; set; }
+        public GenerationRoute Route { get; set; }
+        public CodeType CodeType { get; set; }
+        public string? Error { get; set; }
+        public string? RawJson { get; set; }
+
+        public static GenerationIntentResult Ok(GenerationRoute route, CodeType codeType, string? rawJson) => new()
+        {
+            Success = true,
+            Route = route,
+            CodeType = codeType,
+            RawJson = rawJson ?? ""
+        };
+
+        public static GenerationIntentResult Fail(string error, string? rawJson = null) => new()
+        {
+            Success = false,
+            Error = error,
+            RawJson = rawJson ?? ""
+        };
+    }
+
+    /// <summary>
     /// 代码生成结果
     /// </summary>
     public class CodeGenerationResult
@@ -54,6 +81,116 @@ namespace UnityMCP.AI
         private static readonly Regex ThinkBlockRegex = new(
             @"<think>[\s\S]*?</think>",
             RegexOptions.Compiled);
+
+        [Serializable]
+        private class GenerationIntentJson
+        {
+            public string? generationTarget;
+            public string? codeType;
+        }
+
+        /// <summary>
+        /// 从 AI 返回文本中解析生成意图（代码 / 预制体 / 联合）。
+        /// </summary>
+        public static GenerationIntentResult ParseGenerationIntent(string aiContent)
+        {
+            if (string.IsNullOrWhiteSpace(aiContent))
+                return GenerationIntentResult.Fail("AI 返回了空内容");
+
+            var content = StripThinkBlocks(aiContent);
+
+            var jsonText = ExtractJsonBlock(content);
+            if (string.IsNullOrEmpty(jsonText))
+                jsonText = TryExtractIntentJson(content);
+
+            if (string.IsNullOrEmpty(jsonText))
+            {
+                return GenerationIntentResult.Fail(
+                    "无法提取意图 JSON。请确保 AI 返回包含 generationTarget 的 ```json 代码块。",
+                    content);
+            }
+
+            GenerationIntentJson? parsed;
+            try
+            {
+                parsed = JsonUtility.FromJson<GenerationIntentJson>(jsonText);
+            }
+            catch (Exception ex)
+            {
+                return GenerationIntentResult.Fail($"意图 JSON 解析失败: {ex.Message}", jsonText);
+            }
+
+            if (parsed == null)
+                return GenerationIntentResult.Fail("意图 JSON 解析结果为空", jsonText);
+
+            var route = MapGenerationTarget(parsed.generationTarget);
+            if (route == null)
+            {
+                return GenerationIntentResult.Fail(
+                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both。",
+                    jsonText);
+            }
+
+            var codeType = MapCodeTypeHint(parsed.codeType);
+            return GenerationIntentResult.Ok(route.Value, codeType, jsonText);
+        }
+
+        private static GenerationRoute? MapGenerationTarget(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var s = raw.Trim().ToLowerInvariant().Replace(" ", "").Replace("_", "");
+            return s switch
+            {
+                "code" or "script" or "csharp" or "cs" => GenerationRoute.Code,
+                "prefab" or "prefabrication" or "gameobject" => GenerationRoute.Prefab,
+                "both" or "combined" or "all" or "codeandprefab" or "prefabandcode" => GenerationRoute.Both,
+                // 常见中文返回值（本地模型）
+                "代码" or "脚本" or "csharp脚本" => GenerationRoute.Code,
+                "预制体" or "预设" => GenerationRoute.Prefab,
+                "联合" or "两者" or "都要" or "代码和预制体" or "脚本和预制体" => GenerationRoute.Both,
+                _ => null
+            };
+        }
+
+        private static CodeType MapCodeTypeHint(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return CodeType.Auto;
+            var s = raw.Trim().ToLowerInvariant().Replace(" ", "").Replace("_", "");
+            return s switch
+            {
+                "monobehaviour" or "monobehavior" or "component" or "behaviour" or "behavior" => CodeType.MonoBehaviour,
+                "scriptableobject" or "scriptable" => CodeType.ScriptableObject,
+                "manager" or "singleton" => CodeType.ManagerSingleton,
+                _ => CodeType.Auto
+            };
+        }
+
+        /// <summary>
+        /// 从正文中提取包含 generationTarget 的 JSON 对象（未使用代码块时）。
+        /// </summary>
+        private static string? TryExtractIntentJson(string content)
+        {
+            var idx = content.IndexOf("\"generationTarget\"", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) idx = content.IndexOf("'generationTarget'", StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return null;
+
+            var start = content.LastIndexOf('{', idx);
+            if (start < 0) return null;
+
+            var depth = 0;
+            for (var i = start; i < content.Length; i++)
+            {
+                if (content[i] == '{') depth++;
+                else if (content[i] == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                        return content.Substring(start, i - start + 1).Trim();
+                }
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// 从 AI 响应中解析代码生成结果

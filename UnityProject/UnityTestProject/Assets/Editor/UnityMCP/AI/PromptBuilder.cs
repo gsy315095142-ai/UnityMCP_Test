@@ -5,6 +5,16 @@ using UnityMCP.Core;
 namespace UnityMCP.AI
 {
     /// <summary>
+    /// AI 路由判断结果：本次应执行的生成类别（与 UI 中的生成模式对应）。
+    /// </summary>
+    public enum GenerationRoute
+    {
+        Code = 0,
+        Prefab = 1,
+        Both = 2
+    }
+
+    /// <summary>
     /// 代码类型枚举，用于指导 AI 生成不同类型的脚本
     /// </summary>
     public enum CodeType
@@ -23,6 +33,49 @@ namespace UnityMCP.AI
     {
         private static readonly string[] CODE_TYPE_LABELS = { "自动检测", "MonoBehaviour", "ScriptableObject", "Manager 单例" };
         public static string[] CodeTypeLabels => CODE_TYPE_LABELS;
+
+        #region AI 意图路由（判断生成代码 / 预制体 / 联合）
+
+        /// <summary>
+        /// 构建「仅输出路由 JSON」的系统 Prompt。
+        /// </summary>
+        public static string BuildIntentRouteSystemPrompt(ProjectContext context)
+        {
+            return $@"你是 Unity 编辑器插件中的「意图路由」模块。根据用户一句自然语言，判断本次应执行哪一种生成任务。
+只输出一个 JSON 对象，并且必须用 ```json 代码块包裹。不要输出其他任何文字。
+
+JSON 格式（字段名必须一致）：
+{{
+  ""generationTarget"": ""code"" | ""prefab"" | ""both"",
+  ""codeType"": ""auto"" | ""monobehaviour"" | ""scriptableobject"" | ""manager""
+}}
+
+判断规则（generationTarget）：
+- ""code""：用户主要需要 C# 脚本、类、逻辑、算法、配置数据类型（ScriptableObject）说明但仍在代码层面；或明确只要脚本不要预制体。
+- ""prefab""：用户主要描述场景对象 / UI 层级 / 物体结构 / 组件组合，且没有表达需要新建自定义脚本（或仅需要内置组件）。
+- ""both""：用户同时需要「新脚本逻辑」和「可被实例化的预制体」，例如：带移动脚本的玩家预制体、挂接自定义 MonoBehaviour 的道具、需要挂载刚生成脚本的物体等。
+
+codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""auto""）：
+- ""auto""：由后续代码生成步骤自动区分 MonoBehaviour / ScriptableObject / Manager
+- ""monobehaviour""：明确需要挂载到物体的 MonoBehaviour
+- ""scriptableobject""：明确是资源资产型配置（仅当需要脚本时与 generationTarget 为 code/both 组合）
+- ""manager""：明确是持久化单例管理器
+
+{context.ToPromptContext()}";
+        }
+
+        /// <summary>
+        /// 意图路由的用户 Prompt。
+        /// </summary>
+        public static string BuildIntentRouteUserPrompt(string userRequest)
+        {
+            return $@"用户需求（原文）：
+{userRequest}
+
+请只输出 JSON 代码块（```json ... ```），不要添加解释。";
+        }
+
+        #endregion
 
         #region 代码生成 Prompt
 

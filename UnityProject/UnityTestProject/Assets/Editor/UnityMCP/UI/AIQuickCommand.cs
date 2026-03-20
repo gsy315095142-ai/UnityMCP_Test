@@ -37,9 +37,11 @@ namespace UnityMCP.UI
     /// </summary>
     public enum GenerateMode
     {
-        Code = 0,
-        Prefab = 1,
-        Combined = 2
+        /// <summary>由 AI 根据自然语言判断生成代码、预制体或联合生成</summary>
+        AiJudge = 0,
+        Code = 1,
+        Prefab = 2,
+        Combined = 3
     }
 
     /// <summary>
@@ -91,11 +93,11 @@ namespace UnityMCP.UI
     /// </summary>
     public class AIQuickCommand : EditorWindow
     {
-        private static readonly string[] MODE_LABELS = { "生成代码", "生成预制体", "联合生成" };
+        private static readonly string[] MODE_LABELS = { "AI判断", "生成代码", "生成预制体", "联合生成" };
 
         #region Fields
 
-        private GenerateMode _currentMode = GenerateMode.Code;
+        private GenerateMode _currentMode = GenerateMode.AiJudge;
         private CodeType _currentCodeType = CodeType.Auto;
         private string _userInput = "";
 
@@ -204,13 +206,18 @@ namespace UnityMCP.UI
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             
             EditorGUILayout.LabelField("模式:", GUILayout.Width(40));
-            _currentMode = (GenerateMode)EditorGUILayout.Popup((int)_currentMode, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(100));
+            _currentMode = (GenerateMode)EditorGUILayout.Popup((int)_currentMode, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(120));
 
             if (_currentMode == GenerateMode.Code || _currentMode == GenerateMode.Combined)
             {
                 EditorGUILayout.Space(10);
                 EditorGUILayout.LabelField("代码类型:", GUILayout.Width(60));
                 _currentCodeType = (CodeType)EditorGUILayout.Popup((int)_currentCodeType, PromptBuilder.CodeTypeLabels, EditorStyles.toolbarPopup, GUILayout.Width(120));
+            }
+            else if (_currentMode == GenerateMode.AiJudge)
+            {
+                EditorGUILayout.Space(10);
+                EditorGUILayout.LabelField("(代码类型由 AI 判断)", EditorStyles.miniLabel, GUILayout.Width(140));
             }
 
             GUILayout.FlexibleSpace();
@@ -309,6 +316,7 @@ namespace UnityMCP.UI
 
             string hint = _currentMode switch
             {
+                GenerateMode.AiJudge => "用自然语言描述即可；AI 会判断生成脚本、预制体或两者。例：只做一条飞机控制器脚本 / 做一个带血条的 UI 面板 / 做可拾取金币带旋转脚本和预制体",
                 GenerateMode.Code => "描述你需要的脚本，如：创建一个包含WASD移动的Player脚本",
                 GenerateMode.Prefab => "描述你需要的预制体，如：创建一个包含碰撞体的玩家预制体",
                 GenerateMode.Combined => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
@@ -547,6 +555,10 @@ namespace UnityMCP.UI
 
             switch (context.Mode)
             {
+                case GenerateMode.AiJudge:
+                    AddTextBubble("⏳ AI 正在分析需求类型，请稍候...");
+                    ResolveIntentThenExecuteAsync(context);
+                    break;
                 case GenerateMode.Code:
                     AddTextBubble("⏳ 正在生成代码，请稍候...");
                     GenerateCodeAsync(context);
@@ -579,6 +591,113 @@ namespace UnityMCP.UI
             _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
             _chatHistory.Add(msg);
             ScrollToBottom();
+        }
+
+        private static GenerateMode MapRouteToMode(GenerationRoute route) => route switch
+        {
+            GenerationRoute.Code => GenerateMode.Code,
+            GenerationRoute.Prefab => GenerateMode.Prefab,
+            GenerationRoute.Both => GenerateMode.Combined,
+            _ => GenerateMode.Code
+        };
+
+        private static string ModeDecisionLabel(GenerateMode mode) => mode switch
+        {
+            GenerateMode.Code => "生成代码",
+            GenerateMode.Prefab => "生成预制体",
+            GenerateMode.Combined => "联合生成（代码 + 预制体）",
+            _ => mode.ToString()
+        };
+
+        /// <summary>
+        /// 【AI判断】先调用模型输出路由 JSON，再进入对应生成流程。
+        /// </summary>
+        private async void ResolveIntentThenExecuteAsync(ChatMessage context)
+        {
+            if (_config == null)
+            {
+                context.ErrorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+                return;
+            }
+
+            try
+            {
+                var service = AIServiceFactory.Create(_config);
+                var projContext = ProjectContext.Collect();
+                var systemPrompt = PromptBuilder.BuildIntentRouteSystemPrompt(projContext);
+                var userPrompt = PromptBuilder.BuildIntentRouteUserPrompt(context.Content);
+
+                var response = await service.SendMessageAsync(systemPrompt, userPrompt);
+
+                if (!response.Success)
+                {
+                    context.ErrorMessage = response.Error ?? "AI 返回了未知错误";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                var intent = ResponseParser.ParseGenerationIntent(response.Content);
+                if (!intent.Success)
+                {
+                    context.ErrorMessage = intent.Error ?? "无法解析 AI 判断结果";
+                    if (!string.IsNullOrEmpty(intent.RawJson))
+                        context.ErrorMessage += $"\n\nAI 原始输出:\n{intent.RawJson}";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                var resolvedMode = MapRouteToMode(intent.Route);
+                context.Mode = resolvedMode;
+                context.CodeType = intent.CodeType;
+
+                _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
+
+                var label = ModeDecisionLabel(resolvedMode);
+                var codeHint = resolvedMode != GenerateMode.Prefab
+                    ? $"（代码类型：{PromptBuilder.CodeTypeLabels[(int)intent.CodeType]}）"
+                    : "";
+                AddTextBubble($"根据需求判断为：<b>{label}</b> {codeHint}");
+
+                switch (resolvedMode)
+                {
+                    case GenerateMode.Code:
+                        AddTextBubble("⏳ 正在生成代码，请稍候...");
+                        GenerateCodeAsync(context);
+                        break;
+                    case GenerateMode.Prefab:
+                        AddTextBubble("⏳ 正在生成预制体，请稍候...");
+                        GeneratePrefabAsync(context);
+                        break;
+                    case GenerateMode.Combined:
+                        AddTextBubble("⏳ 联合生成 (第1步): 正在生成代码，请稍候...");
+                        GenerateCodeAsync(context);
+                        break;
+                    default:
+                        context.ErrorMessage = $"内部错误：未知解析模式 {resolvedMode}";
+                        context.Type = MessageTypeEnum.Error;
+                        _isGenerating = false;
+                        AddResultBubble(context);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                context.ErrorMessage = $"判断需求类型时出错: {ex.Message}";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            finally
+            {
+                Repaint();
+            }
         }
 
         private async void GenerateCodeAsync(ChatMessage context)

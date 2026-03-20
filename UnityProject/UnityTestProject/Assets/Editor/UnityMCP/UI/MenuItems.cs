@@ -18,7 +18,7 @@ namespace UnityMCP.UI
                 "Unity AI 助手",
                 "Unity AI 辅助开发插件 (UnityMCP)\n\n" +
                 "版本: 0.1.0 (Phase 1 MVP)\n" +
-                "功能: AI 驱动的代码生成\n\n" +
+                "功能: AI 驱动代码 / 预制体生成（默认：AI判断模式）\n\n" +
                 "快捷键:\n" +
                 "  Ctrl+Shift+.  快捷生成\n" +
                 "  Ctrl+Shift+,  打开设置\n\n" +
