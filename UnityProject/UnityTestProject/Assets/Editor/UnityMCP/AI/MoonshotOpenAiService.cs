@@ -20,8 +20,24 @@ namespace UnityMCP.AI
         /// <summary>国际区可选：<c>https://api.moonshot.ai/v1</c>。</summary>
         public const string InternationalBaseUrl = "https://api.moonshot.ai/v1";
 
-        /// <summary>Kimi K2.5 等模型在开放平台中的常见 model 标识（以控制台为准）。</summary>
-        public const string DefaultModelKimiK25 = "kimi-k2-5";
+        /// <summary>
+        /// 切换 Moonshot 时填入的默认 model（Kimi <b>K2.5</b>：编号里是 <b>点号</b> <c>k2.5</c>）。
+        /// 勿写成 <c>kimi-k2-5</c>（连字符）——与官方 model id 不一致，会 404。
+        /// 若账户仅开放 K2（非 2.5）线路，可在设置里改为控制台列出的 ID，例如 <c>kimi-k2-0905-preview</c>、<c>kimi-k2-turbo-preview</c>。
+        /// </summary>
+        public const string DefaultModel = "kimi-k2.5";
+
+        /// <summary>Kimi K2.5 系列：开放平台仅接受 <c>temperature = 1</c>，否则会 400。</summary>
+        public static bool ModelLocksTemperatureToOne(string modelId)
+        {
+            return !string.IsNullOrEmpty(modelId) &&
+                   modelId.Contains("k2.5", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static float ResolveRequestTemperature(string modelId, float configured)
+        {
+            return ModelLocksTemperatureToOne(modelId) ? 1f : configured;
+        }
 
         private readonly AIServiceConfig _config;
 
@@ -40,15 +56,16 @@ namespace UnityMCP.AI
             var startTime = Time.realtimeSinceStartup;
             var url = BuildUrl("/chat/completions");
 
+            var modelId = _config.GetEffectiveModel();
             var body = new ChatCompletionRequest
             {
-                model = _config.GetEffectiveModel(),
+                model = modelId,
                 messages = new[]
                 {
                     new ChatMessage { role = "system", content = systemPrompt },
                     new ChatMessage { role = "user", content = userMessage }
                 },
-                temperature = _config.temperature,
+                temperature = ResolveRequestTemperature(modelId, _config.temperature),
                 max_tokens = _config.maxTokens
             };
 
@@ -67,8 +84,25 @@ namespace UnityMCP.AI
                 }
 
                 var content = parsed.choices[0].message?.content ?? "";
+                if (string.IsNullOrWhiteSpace(content))
+                    content = OpenAiCompatibleResponseParser.ExtractAssistantText(responseText);
+
                 var duration = Time.realtimeSinceStartup - startTime;
                 var tokens = parsed.usage?.total_tokens ?? 0;
+                if (tokens <= 0)
+                    tokens = OpenAiCompatibleResponseParser.TryParseTotalTokens(responseText);
+
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    var snippetLen = Math.Min(1200, responseText.Length);
+                    var snippet = responseText.Length > snippetLen
+                        ? responseText.Substring(0, snippetLen) + "…"
+                        : responseText;
+                    Debug.LogWarning($"[UnityMCP] Moonshot 响应正文为空。请确认模型返回的 message.content 格式；原始片段：\n{snippet}");
+                    return AIResponse.Fail(
+                        "Moonshot 返回的正文为空。常见原因：API 将回复放在 content 数组/其它字段，而 JsonUtility 只能读字符串。\n已尝试兼容解析仍失败时，请把 Console 中警告里的响应片段发给开发者对照。\n" +
+                        $"响应片段：\n{snippet}");
+                }
 
                 return AIResponse.Ok(content, duration, tokens);
             }

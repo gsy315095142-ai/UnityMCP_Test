@@ -99,7 +99,7 @@ namespace UnityMCP.UI
                     EditorGUILayout.HelpBox(
                         "请在 platform.moonshot.cn 创建 API Key。默认端点为中国区 https://api.moonshot.cn/v1；" +
                         "国际区可改为 https://api.moonshot.ai/v1。\n" +
-                        $"默认模型：{MoonshotOpenAiService.DefaultModelKimiK25}（Kimi K2.5 系列，以控制台实际名称为准）。",
+                        $"默认模型：{MoonshotOpenAiService.DefaultModel}（K2.5 为 k2「点」5，勿写成 kimi-k2-5）。其它模型名以控制台为准。",
                         MessageType.None);
                 }
             }
@@ -153,8 +153,8 @@ namespace UnityMCP.UI
                 else if (_config.provider == AIProvider.Moonshot)
                 {
                     EditorGUILayout.HelpBox(
-                        $"切换为月之暗面时会自动填入默认模型 {MoonshotOpenAiService.DefaultModelKimiK25}；" +
-                        "若调用报错，请到开放平台核对当前可用的 model 名称并修改此处。",
+                        $"切换为月之暗面时会自动填入默认模型 {MoonshotOpenAiService.DefaultModel}；" +
+                        "若 404，请核对控制台模型列表（K2 线可能与 K2.5 的 id 不同）。",
                         MessageType.None);
                 }
             }
@@ -167,9 +167,19 @@ namespace UnityMCP.UI
             {
                 _config.temperature = EditorGUILayout.Slider(
                     "Temperature", _config.temperature, 0f, 1f);
-                EditorGUILayout.HelpBox(
-                    "越低越确定性（适合代码生成），越高越有创造性",
-                    MessageType.None);
+                if (_config.provider == AIProvider.Moonshot &&
+                    MoonshotOpenAiService.ModelLocksTemperatureToOne(_config.GetEffectiveModel()))
+                {
+                    EditorGUILayout.HelpBox(
+                        "当前 Moonshot 模型为 Kimi K2.5：接口要求 temperature 必须为 1，请求时会自动使用 1（与滑块无关）。",
+                        MessageType.Info);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "越低越确定性（适合代码生成），越高越有创造性",
+                        MessageType.None);
+                }
 
                 _config.maxTokens = EditorGUILayout.IntSlider(
                     "最大 Token 数", _config.maxTokens, 512, 16384);

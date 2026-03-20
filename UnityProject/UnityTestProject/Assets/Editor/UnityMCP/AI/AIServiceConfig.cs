@@ -89,7 +89,7 @@ namespace UnityMCP.AI
                 AIProvider.OpenAI => "gpt-4o",
                 AIProvider.Claude => "claude-3-5-sonnet-20241022",
                 AIProvider.Azure => "gpt-4o",
-                AIProvider.Moonshot => MoonshotOpenAiService.DefaultModelKimiK25,
+                AIProvider.Moonshot => MoonshotOpenAiService.DefaultModel,
                 _ => ""
             };
         }
@@ -108,7 +108,7 @@ namespace UnityMCP.AI
                     break;
                 case AIProvider.Moonshot:
                     customEndpoint = MoonshotOpenAiService.DefaultBaseUrl;
-                    modelName = MoonshotOpenAiService.DefaultModelKimiK25;
+                    modelName = MoonshotOpenAiService.DefaultModel;
                     break;
                 case AIProvider.OpenAI:
                     customEndpoint = "https://api.openai.com/v1";
@@ -170,6 +170,13 @@ namespace UnityMCP.AI
                 {
                     config = new AIServiceConfig();
                 }
+            }
+
+            // 易错：K2.5 的 model id 为 kimi-k2.5（点号），写成 kimi-k2-5（横杠）会 404
+            if (config.provider == AIProvider.Moonshot &&
+                string.Equals(config.modelName?.Trim(), "kimi-k2-5", StringComparison.Ordinal))
+            {
+                config.modelName = MoonshotOpenAiService.DefaultModel;
             }
 
             var encodedKey = EditorPrefs.GetString(API_KEY_PREFS_KEY, "");
