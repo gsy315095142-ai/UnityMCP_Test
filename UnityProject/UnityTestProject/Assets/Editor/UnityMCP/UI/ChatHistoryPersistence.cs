@@ -49,6 +49,7 @@ namespace UnityMCP.UI
             public int sceneOpsSkipped;
             public int compileWaitTicks;
             public string assetDeletePathsJoined = "";
+            public string inlineActionsClicked = "";
         }
 
         public static void Save(IReadOnlyList<ChatMessage> history)
@@ -132,7 +133,8 @@ namespace UnityMCP.UI
                 sceneOpsExecuted = m.SceneOpsExecutedStepCount,
                 sceneOpsSkipped = m.SceneOpsSkippedStepCount,
                 compileWaitTicks = m.CompileWaitTicks,
-                assetDeletePathsJoined = string.Join("\n", m.AssetDeletePaths ?? new List<string>())
+                assetDeletePathsJoined = string.Join("\n", m.AssetDeletePaths ?? new List<string>()),
+                inlineActionsClicked = m.InlineActionsClicked ?? ""
             };
         }
 
@@ -159,7 +161,8 @@ namespace UnityMCP.UI
                 CodeTokensUsed = p.codeTokensUsed,
                 SceneOpsExecutedStepCount = p.sceneOpsExecuted,
                 SceneOpsSkippedStepCount = p.sceneOpsSkipped,
-                CompileWaitTicks = p.compileWaitTicks
+                CompileWaitTicks = p.compileWaitTicks,
+                InlineActionsClicked = p.inlineActionsClicked ?? ""
             };
 
             if (!string.IsNullOrEmpty(p.assetDeletePathsJoined))

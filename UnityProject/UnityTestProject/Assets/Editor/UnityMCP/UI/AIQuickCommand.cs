@@ -112,6 +112,9 @@ namespace UnityMCP.UI
         public AssetOpsEnvelopeDto? AssetOpsEnvelope;
         public int AssetOpsExecutedStepCount;
 
+        /// <summary>气泡内操作按钮已点击的键（逗号分隔），用于【已确认】与未选项置灰。</summary>
+        public string InlineActionsClicked = "";
+
         // 快捷创建文本消息
         public static ChatMessage CreateText(ChatRole role, string text) => new()
         {
@@ -150,7 +153,8 @@ namespace UnityMCP.UI
                 CombinedPrefabFirst = a.CombinedPrefabFirst,
                 AssetDeletePaths = new List<string>(a.AssetDeletePaths),
                 AssetOpsEnvelope = a.AssetOpsEnvelope,
-                AssetOpsExecutedStepCount = a.AssetOpsExecutedStepCount
+                AssetOpsExecutedStepCount = a.AssetOpsExecutedStepCount,
+                InlineActionsClicked = a.InlineActionsClicked ?? ""
             };
         }
     }
@@ -913,6 +917,7 @@ namespace UnityMCP.UI
             {
                 case MessageTypeEnum.Text:
                     DrawSelectableLabel(msg.Content, _assistantBubbleStyle!, AssistantBubbleTextWidth());
+                    DrawAssetDeleteResolvedBarForText(msg);
                     if (msg.Content.Contains("⏳")) Repaint(); // 如果是等待中，刷新UI
                     break;
                 case MessageTypeEnum.CodeGenerated:
@@ -996,6 +1001,200 @@ namespace UnityMCP.UI
 
         #region 消息内部状态绘制
 
+        private static class InlineActionKeys
+        {
+            public const string SceneOpsPreviewJson = "scene_ops_preview";
+            public const string SceneOpsExecute = "scene_ops_execute";
+            public const string AssetDeleteConfirm = "asset_delete_confirm";
+            public const string AssetDeleteCancel = "asset_delete_cancel";
+            public const string AssetOpsExecute = "asset_ops_execute";
+            public const string PrefabPreviewJson = "prefab_preview_json";
+            public const string PrefabCreate = "prefab_create";
+            public const string CodePreview = "code_preview";
+            public const string CodeSave = "code_save";
+            public const string CodeSaveAndContinue = "code_save_continue";
+        }
+
+        private static bool HasInlineAction(ChatMessage msg, string key)
+        {
+            if (string.IsNullOrEmpty(msg.InlineActionsClicked) || string.IsNullOrEmpty(key))
+                return false;
+            foreach (var part in msg.InlineActionsClicked.Split(','))
+            {
+                if (string.Equals(part.Trim(), key, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void AddInlineAction(ChatMessage msg, string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return;
+            var set = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var part in (msg.InlineActionsClicked ?? "").Split(','))
+            {
+                var t = part.Trim();
+                if (t.Length > 0)
+                    set.Add(t);
+            }
+
+            set.Add(key);
+            msg.InlineActionsClicked = string.Join(",", set);
+        }
+
+        private static void RemoveInlineAction(ChatMessage msg, string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return;
+            var list = new List<string>();
+            foreach (var part in (msg.InlineActionsClicked ?? "").Split(','))
+            {
+                var t = part.Trim();
+                if (t.Length > 0 && !string.Equals(t, key, StringComparison.Ordinal))
+                    list.Add(t);
+            }
+
+            msg.InlineActionsClicked = list.Count > 0 ? string.Join(",", list) : "";
+        }
+
+        /// <summary>场景操控：预览 / 执行 两行按钮；已点的显示【已确认】类文案，未点的置灰。</summary>
+        private void DrawSceneOpsInlineActions(ChatMessage msg, bool readOnlySummary)
+        {
+            EditorGUILayout.BeginHorizontal();
+            if (HasInlineAction(msg, InlineActionKeys.SceneOpsPreviewJson))
+            {
+                EditorGUILayout.LabelField("【已预览】 JSON", EditorStyles.boldLabel, GUILayout.Height(24));
+            }
+            else
+            {
+                EditorGUI.BeginDisabledGroup(readOnlySummary);
+                if (GUILayout.Button("预览 JSON", GUILayout.Height(25)))
+                {
+                    AddInlineAction(msg, InlineActionKeys.SceneOpsPreviewJson);
+                    PreviewWindow.ShowWindow("unity-ops JSON 预览", msg.RawJson);
+                    PersistChatHistory();
+                    Repaint();
+                }
+
+                EditorGUI.EndDisabledGroup();
+            }
+
+            if (HasInlineAction(msg, InlineActionKeys.SceneOpsExecute))
+            {
+                EditorGUILayout.LabelField("【已确认】执行场景操作", EditorStyles.boldLabel, GUILayout.Height(24));
+            }
+            else
+            {
+                EditorGUI.BeginDisabledGroup(readOnlySummary);
+                if (GUILayout.Button("执行场景操作", GUILayout.Height(25)))
+                {
+                    AddInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+                    PersistChatHistory();
+                    Repaint();
+                    ExecuteSceneOps(msg);
+                }
+
+                EditorGUI.EndDisabledGroup();
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawAssetDeleteInlineActions(ChatMessage msg)
+        {
+            var confirmDone = HasInlineAction(msg, InlineActionKeys.AssetDeleteConfirm);
+            var cancelDone = HasInlineAction(msg, InlineActionKeys.AssetDeleteCancel);
+            var decided = confirmDone || cancelDone;
+
+            EditorGUILayout.BeginHorizontal();
+            if (confirmDone)
+                EditorGUILayout.LabelField("【已确认】删除", EditorStyles.boldLabel, GUILayout.Height(28));
+            else
+            {
+                EditorGUI.BeginDisabledGroup(decided);
+                if (GUILayout.Button("确认删除", GUILayout.Height(28)))
+                {
+                    AddInlineAction(msg, InlineActionKeys.AssetDeleteConfirm);
+                    PersistChatHistory();
+                    Repaint();
+                    ExecuteConfirmedAssetDelete(msg);
+                }
+
+                EditorGUI.EndDisabledGroup();
+            }
+
+            if (cancelDone)
+                EditorGUILayout.LabelField("【已取消】", EditorStyles.boldLabel, GUILayout.Height(28));
+            else
+            {
+                EditorGUI.BeginDisabledGroup(decided);
+                if (GUILayout.Button("取消", GUILayout.Height(28)))
+                {
+                    AddInlineAction(msg, InlineActionKeys.AssetDeleteCancel);
+                    msg.Type = MessageTypeEnum.Text;
+                    msg.Content = "已取消删除。";
+                    msg.AssetDeletePaths.Clear();
+                    PersistChatHistory();
+                    Repaint();
+                }
+
+                EditorGUI.EndDisabledGroup();
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawAssetDeleteResolvedBarForText(ChatMessage msg)
+        {
+            if (!HasInlineAction(msg, InlineActionKeys.AssetDeleteConfirm) &&
+                !HasInlineAction(msg, InlineActionKeys.AssetDeleteCancel))
+                return;
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.BeginHorizontal();
+            if (HasInlineAction(msg, InlineActionKeys.AssetDeleteConfirm))
+                EditorGUILayout.LabelField("【已确认】删除", EditorStyles.boldLabel, GUILayout.Height(24));
+            else
+            {
+                EditorGUI.BeginDisabledGroup(true);
+                GUILayout.Button("确认删除", GUILayout.Height(24));
+                EditorGUI.EndDisabledGroup();
+            }
+
+            if (HasInlineAction(msg, InlineActionKeys.AssetDeleteCancel))
+                EditorGUILayout.LabelField("【已取消】", EditorStyles.boldLabel, GUILayout.Height(24));
+            else
+            {
+                EditorGUI.BeginDisabledGroup(true);
+                GUILayout.Button("取消", GUILayout.Height(24));
+                EditorGUI.EndDisabledGroup();
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawAssetOpsInlineActions(ChatMessage msg, bool readOnlySummary)
+        {
+            if (HasInlineAction(msg, InlineActionKeys.AssetOpsExecute))
+            {
+                EditorGUILayout.LabelField("【已确认】执行资源整理", EditorStyles.boldLabel, GUILayout.Height(28));
+                return;
+            }
+
+            EditorGUI.BeginDisabledGroup(readOnlySummary);
+            if (GUILayout.Button("执行资源整理", GUILayout.Height(28)))
+            {
+                AddInlineAction(msg, InlineActionKeys.AssetOpsExecute);
+                PersistChatHistory();
+                Repaint();
+                ExecuteAssetOps(msg);
+            }
+
+            EditorGUI.EndDisabledGroup();
+        }
+
         private void DrawCodeGeneratedState(ChatMessage msg)
         {
             var tw = AssistantBubbleTextWidth();
@@ -1021,8 +1220,16 @@ namespace UnityMCP.UI
                 EditorGUILayout.Space(5);
                 DrawSelectableLabel($"已保存: {msg.SavedScriptPath}", EditorStyles.miniLabel, tw);
                 EditorGUILayout.Space(5);
-                if (GUILayout.Button("预览代码", GUILayout.Height(25)))
+                if (HasInlineAction(msg, InlineActionKeys.CodePreview))
+                    EditorGUILayout.LabelField("【已预览】代码", EditorStyles.boldLabel, GUILayout.Height(25));
+                else if (GUILayout.Button("预览代码", GUILayout.Height(25)))
+                {
+                    AddInlineAction(msg, InlineActionKeys.CodePreview);
                     PreviewWindow.ShowWindow($"{msg.ScriptName}.cs 预览", msg.GeneratedCode);
+                    PersistChatHistory();
+                    Repaint();
+                }
+
                 return;
             }
             
@@ -1041,22 +1248,50 @@ namespace UnityMCP.UI
             EditorGUILayout.Space(5);
             EditorGUILayout.BeginHorizontal();
             
-            if (GUILayout.Button("预览代码", GUILayout.Height(25)))
+            if (HasInlineAction(msg, InlineActionKeys.CodePreview))
+                EditorGUILayout.LabelField("【已预览】代码", EditorStyles.boldLabel, GUILayout.Height(25));
+            else if (GUILayout.Button("预览代码", GUILayout.Height(25)))
             {
+                AddInlineAction(msg, InlineActionKeys.CodePreview);
                 PreviewWindow.ShowWindow($"{msg.ScriptName}.cs 预览", msg.GeneratedCode);
+                PersistChatHistory();
+                Repaint();
             }
+
             if (msg.Mode == GenerateMode.Combined)
             {
-                if (GUILayout.Button("保存并继续生成预制体", GUILayout.Height(25)))
+                if (HasInlineAction(msg, InlineActionKeys.CodeSaveAndContinue))
+                    EditorGUILayout.LabelField("【已确认】保存并继续", EditorStyles.boldLabel, GUILayout.Height(25));
+                else
                 {
-                    SaveCodeAndContinueCombined(msg);
+                    EditorGUI.BeginDisabledGroup(HasInlineAction(msg, InlineActionKeys.CodeSave));
+                    if (GUILayout.Button("保存并继续生成预制体", GUILayout.Height(25)))
+                    {
+                        AddInlineAction(msg, InlineActionKeys.CodeSaveAndContinue);
+                        PersistChatHistory();
+                        Repaint();
+                        SaveCodeAndContinueCombined(msg);
+                    }
+
+                    EditorGUI.EndDisabledGroup();
                 }
             }
             else
             {
-                if (GUILayout.Button("保存文件", GUILayout.Height(25)))
+                if (HasInlineAction(msg, InlineActionKeys.CodeSave))
+                    EditorGUILayout.LabelField("【已确认】保存文件", EditorStyles.boldLabel, GUILayout.Height(25));
+                else
                 {
-                    SaveScript(msg);
+                    EditorGUI.BeginDisabledGroup(HasInlineAction(msg, InlineActionKeys.CodeSaveAndContinue));
+                    if (GUILayout.Button("保存文件", GUILayout.Height(25)))
+                    {
+                        AddInlineAction(msg, InlineActionKeys.CodeSave);
+                        PersistChatHistory();
+                        Repaint();
+                        SaveScript(msg);
+                    }
+
+                    EditorGUI.EndDisabledGroup();
                 }
             }
             
@@ -1090,14 +1325,26 @@ namespace UnityMCP.UI
 
             EditorGUILayout.Space(5);
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("预览 JSON", GUILayout.Height(25)))
+            if (HasInlineAction(msg, InlineActionKeys.PrefabPreviewJson))
+                EditorGUILayout.LabelField("【已预览】 JSON", EditorStyles.boldLabel, GUILayout.Height(25));
+            else if (GUILayout.Button("预览 JSON", GUILayout.Height(25)))
             {
+                AddInlineAction(msg, InlineActionKeys.PrefabPreviewJson);
                 PreviewWindow.ShowWindow($"{msg.PrefabName}.prefab JSON 预览", msg.RawJson);
+                PersistChatHistory();
+                Repaint();
             }
-            if (GUILayout.Button("创建预制体", GUILayout.Height(25)))
+
+            if (HasInlineAction(msg, InlineActionKeys.PrefabCreate))
+                EditorGUILayout.LabelField("【已确认】创建预制体", EditorStyles.boldLabel, GUILayout.Height(25));
+            else if (GUILayout.Button("创建预制体", GUILayout.Height(25)))
             {
+                AddInlineAction(msg, InlineActionKeys.PrefabCreate);
+                PersistChatHistory();
+                Repaint();
                 SavePrefab(msg);
             }
+
             EditorGUILayout.EndHorizontal();
         }
 
@@ -1128,18 +1375,7 @@ namespace UnityMCP.UI
             }
 
             EditorGUILayout.Space(5);
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("预览 JSON", GUILayout.Height(25)))
-            {
-                PreviewWindow.ShowWindow("unity-ops JSON 预览", msg.RawJson);
-            }
-
-            if (GUILayout.Button("执行场景操作", GUILayout.Height(25)))
-            {
-                ExecuteSceneOps(msg);
-            }
-
-            EditorGUILayout.EndHorizontal();
+            DrawSceneOpsInlineActions(msg, readOnlySummary: false);
         }
 
         private void DrawAssetDeleteReadyState(ChatMessage msg)
@@ -1162,19 +1398,7 @@ namespace UnityMCP.UI
             }
 
             EditorGUILayout.Space(5);
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("确认删除", GUILayout.Height(28)))
-                ExecuteConfirmedAssetDelete(msg);
-            if (GUILayout.Button("取消", GUILayout.Height(28)))
-            {
-                msg.Type = MessageTypeEnum.Text;
-                msg.Content = "已取消删除。";
-                msg.AssetDeletePaths.Clear();
-                PersistChatHistory();
-                Repaint();
-            }
-
-            EditorGUILayout.EndHorizontal();
+            DrawAssetDeleteInlineActions(msg);
         }
 
         private void ExecuteConfirmedAssetDelete(ChatMessage msg)
@@ -1248,15 +1472,17 @@ namespace UnityMCP.UI
             }
 
             EditorGUILayout.Space(5);
-            if (GUILayout.Button("执行资源整理", GUILayout.Height(28)))
-                ExecuteAssetOps(msg);
+            DrawAssetOpsInlineActions(msg, readOnlySummary: false);
         }
 
         private void ExecuteAssetOps(ChatMessage msg)
         {
             if (msg.AssetOpsEnvelope == null)
             {
+                RemoveInlineAction(msg, InlineActionKeys.AssetOpsExecute);
+                PersistChatHistory();
                 EditorUtility.DisplayDialog("资源整理", "内部错误：未找到已解析的操作列表。", "确定");
+                Repaint();
                 return;
             }
 
@@ -1275,10 +1501,13 @@ namespace UnityMCP.UI
                 return;
             }
 
+            RemoveInlineAction(msg, InlineActionKeys.AssetOpsExecute);
+            PersistChatHistory();
             EditorUtility.DisplayDialog(
                 "资源整理失败",
                 batch.Error ?? "未知错误",
                 "确定");
+            Repaint();
         }
 
         private void DrawWaitingCompileState(ChatMessage msg)
@@ -1320,6 +1549,11 @@ namespace UnityMCP.UI
             DrawSelectableLabel($"<b>{text}</b>", _assistantBubbleStyle!, tw);
             
             EditorGUILayout.Space(5);
+
+            if (msg.Mode == GenerateMode.SceneOps)
+                DrawSceneOpsInlineActions(msg, readOnlySummary: true);
+            if (msg.Mode == GenerateMode.AssetOps)
+                DrawAssetOpsInlineActions(msg, readOnlySummary: true);
 
             if (!string.IsNullOrEmpty(msg.SavedScriptPath))
                 DrawSelectableLabel($"已生成脚本: {msg.SavedScriptPath}", EditorStyles.miniLabel, tw);
@@ -2049,13 +2283,19 @@ namespace UnityMCP.UI
         {
             if (msg.SceneOpsEnvelope == null)
             {
+                RemoveInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+                PersistChatHistory();
                 EditorUtility.DisplayDialog("场景操控", "内部错误：未找到已解析的操作列表。", "确定");
+                Repaint();
                 return;
             }
 
             if (!SceneOpsPreflight.TryValidateSelectionPlaceholder(msg.SceneOpsEnvelope, out var preflightMsg))
             {
+                RemoveInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+                PersistChatHistory();
                 EditorUtility.DisplayDialog("场景操控无法执行", preflightMsg, "确定");
+                Repaint();
                 return;
             }
 
@@ -2070,7 +2310,10 @@ namespace UnityMCP.UI
             var ops = envelope.operations;
             if (ops == null || ops.Length == 0)
             {
+                RemoveInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+                PersistChatHistory();
                 EditorUtility.DisplayDialog("场景操控", "operations 为空。", "确定");
+                Repaint();
                 return;
             }
 
@@ -2094,6 +2337,8 @@ namespace UnityMCP.UI
 
                     if (choice == 1)
                     {
+                        RemoveInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+                        PersistChatHistory();
                         EditorUtility.DisplayDialog(
                             "已中止",
                             $"已执行 {done} 步，跳过 {skipped} 步，已中止（后续未执行）。已做的修改可通过 Ctrl+Z 撤销。",
@@ -2114,6 +2359,8 @@ namespace UnityMCP.UI
                     : MainThread.Run(() => SceneOpsExecutor.ExecuteStep(op));
                 if (!stepResult.Success)
                 {
+                    RemoveInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+                    PersistChatHistory();
                     EditorUtility.DisplayDialog(
                         "场景操控执行失败",
                         $"第 {i + 1} 步失败\n\n{stepResult.Error}\n\n已在此之前成功执行 {done} 步，跳过 {skipped} 步。",
@@ -2158,6 +2405,8 @@ namespace UnityMCP.UI
             }
 
             var detail = batch.Error ?? "未知错误";
+            RemoveInlineAction(msg, InlineActionKeys.SceneOpsExecute);
+            PersistChatHistory();
             EditorUtility.DisplayDialog(
                 "场景操控执行失败",
                 $"第 {batch.FailedAtIndex + 1} 步失败（0-based 下标 {batch.FailedAtIndex}）\n\n{detail}\n\n可修正场景或 Hierarchy 后再次点击「执行场景操作」，或使用「重试此任务」重新问 AI。",
