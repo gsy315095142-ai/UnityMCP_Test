@@ -123,10 +123,13 @@ namespace UnityMCP.UI
             ScrollToBottom();
         }
 
-        private void AddResultBubble(ChatMessage msg)
+        /// <param name="removeWaitingTextBubbles">为 true 时移除「⏳ 正在…」占位文本气泡（新任务出结果时）；追加保存成功等独立气泡时请传 false，避免误删其它等待提示。</param>
+        private void AddResultBubble(ChatMessage msg, bool removeWaitingTextBubbles = true)
         {
-            // 同样移除等待中的文本气泡
-            _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
+            if (removeWaitingTextBubbles)
+                _chatHistory.RemoveAll(m =>
+                    m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text &&
+                    m.Content.StartsWith("⏳", StringComparison.Ordinal));
             // 同一条实例不应出现两次，否则阶段切换时一处改 Type/Content 会牵动所有气泡
             if (_chatHistory.Contains(msg))
                 msg = ChatMessage.CloneSnapshot(msg);
@@ -338,7 +341,11 @@ namespace UnityMCP.UI
                 }
 
                 context.Type = MessageTypeEnum.CodeGenerated;
-                AddResultBubble(context);
+                _isGenerating = false;
+                // 入列必须用快照：与 ExecuteTaskPhase 的 context / _pendingMessage 脱钩，避免后续保存等操作牵动同一条引用
+                var codeAdded = ChatMessage.CloneSnapshot(context);
+                AddResultBubble(codeAdded);
+                _pendingMessage = null;
             }
             catch (Exception ex)
             {
@@ -410,8 +417,10 @@ namespace UnityMCP.UI
                 context.GenerationTime = response.Duration;
                 context.TokensUsed = response.TokensUsed;
                 context.Type = MessageTypeEnum.PrefabGenerated;
-                
-                AddResultBubble(context);
+                _isGenerating = false;
+                var prefabAdded = ChatMessage.CloneSnapshot(context);
+                AddResultBubble(prefabAdded);
+                _pendingMessage = null;
             }
             catch (Exception ex)
             {
@@ -773,10 +782,8 @@ namespace UnityMCP.UI
                 done++;
             }
 
-            msg.SceneOpsExecutedStepCount = done;
-            msg.SceneOpsSkippedStepCount = skipped;
-            msg.Type = MessageTypeEnum.SuccessResult;
             _isGenerating = false;
+            AppendSceneOpsExecutionResultBubble(done, skipped);
             Repaint();
             ScrollToBottom();
 
@@ -789,6 +796,76 @@ namespace UnityMCP.UI
             }
         }
 
+        /// <summary>执行完成后追加一条成功气泡，不修改「场景操控已生成」那条消息的 Type，避免覆盖预览/步骤摘要。</summary>
+        private void AppendSceneOpsExecutionResultBubble(int done, int skipped)
+        {
+            var m = new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Type = MessageTypeEnum.SuccessResult,
+                Mode = GenerateMode.SceneOps,
+                SceneOpsExecutedStepCount = done,
+                SceneOpsSkippedStepCount = skipped
+            };
+            AddResultBubble(m, removeWaitingTextBubbles: false);
+        }
+
+        /// <summary>执行完成后追加一条成功气泡，不修改「资源整理步骤已生成」那条消息的 Type。</summary>
+        private void AppendAssetOpsExecutionResultBubble(int stepsCompleted)
+        {
+            var m = new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Type = MessageTypeEnum.SuccessResult,
+                Mode = GenerateMode.AssetOps,
+                AssetOpsExecutedStepCount = stepsCompleted
+            };
+            AddResultBubble(m, removeWaitingTextBubbles: false);
+        }
+
+        /// <summary>脚本保存成功后追加一条成功气泡，不将原「代码已生成」气泡改为 SuccessResult。</summary>
+        private void AppendCodeSaveSuccessBubble(ChatMessage source, string savedScriptPath)
+        {
+            var m = new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Type = MessageTypeEnum.SuccessResult,
+                Mode = source.Mode,
+                ScriptName = source.ScriptName,
+                SavedScriptPath = savedScriptPath,
+                GenerationTime = source.GenerationTime,
+                TokensUsed = source.TokensUsed,
+                CodeGenerationTime = source.CodeGenerationTime,
+                CodeTokensUsed = source.CodeTokensUsed,
+                SavedPrefabPath = source.SavedPrefabPath,
+                PrefabWarnings = new List<string>(source.PrefabWarnings),
+                CombinedPrefabFirst = source.CombinedPrefabFirst
+            };
+            AddResultBubble(m, removeWaitingTextBubbles: false);
+        }
+
+        /// <summary>预制体保存成功后追加一条成功气泡，不将原「预制体已生成」气泡改为 SuccessResult。</summary>
+        private void AppendPrefabSaveSuccessBubble(ChatMessage source, string savedPrefabPath, IReadOnlyList<string>? warnings)
+        {
+            var w = warnings ?? Array.Empty<string>();
+            var m = new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Type = MessageTypeEnum.SuccessResult,
+                Mode = source.Mode,
+                PrefabName = source.PrefabName,
+                SavedPrefabPath = savedPrefabPath,
+                PrefabWarnings = new List<string>(w),
+                GenerationTime = source.GenerationTime,
+                TokensUsed = source.TokensUsed,
+                CodeGenerationTime = source.CodeGenerationTime,
+                CodeTokensUsed = source.CodeTokensUsed,
+                ScriptName = source.ScriptName,
+                SavedScriptPath = source.SavedScriptPath
+            };
+            AddResultBubble(m, removeWaitingTextBubbles: false);
+        }
+
         private void RunSceneOpsBatchDirect(ChatMessage msg)
         {
             var batch = MainThread.IsMainThread
@@ -796,10 +873,8 @@ namespace UnityMCP.UI
                 : MainThread.Run(() => SceneOpsExecutor.Execute(msg.SceneOpsEnvelope!));
             if (batch.Success)
             {
-                msg.SceneOpsExecutedStepCount = batch.StepsCompleted;
-                msg.SceneOpsSkippedStepCount = 0;
-                msg.Type = MessageTypeEnum.SuccessResult;
                 _isGenerating = false;
+                AppendSceneOpsExecutionResultBubble(batch.StepsCompleted, 0);
                 Repaint();
                 ScrollToBottom();
                 return;

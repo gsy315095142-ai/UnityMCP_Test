@@ -150,10 +150,8 @@ namespace UnityMCP.UI
                 if (GUILayout.Button("取消", GUILayout.Height(28)))
                 {
                     AddInlineAction(msg, InlineActionKeys.AssetDeleteCancel);
-                    msg.Type = MessageTypeEnum.Text;
-                    msg.Content = "已取消删除。";
-                    msg.AssetDeletePaths.Clear();
                     PersistChatHistory();
+                    AddTextBubble("已取消删除。");
                     Repaint();
                 }
 
@@ -446,12 +444,10 @@ namespace UnityMCP.UI
             }
 
             AssetDatabase.Refresh();
-            msg.Type = MessageTypeEnum.Text;
-            msg.AssetDeletePaths.Clear();
-            msg.Content = failed.Count == 0
+            var summary = failed.Count == 0
                 ? $"已删除 {ok} 个资源。"
                 : $"已删除 {ok} 个资源。\n\n失败或跳过：\n" + string.Join("\n", failed);
-            PersistChatHistory();
+            AddTextBubble(summary);
             Repaint();
             ScrollToBottom();
         }
@@ -509,10 +505,8 @@ namespace UnityMCP.UI
 
             if (batch.Success)
             {
-                msg.AssetOpsExecutedStepCount = batch.StepsCompleted;
-                msg.Type = MessageTypeEnum.SuccessResult;
                 _isGenerating = false;
-                PersistChatHistory();
+                AppendAssetOpsExecutionResultBubble(batch.StepsCompleted);
                 Repaint();
                 ScrollToBottom();
                 return;
@@ -531,22 +525,37 @@ namespace UnityMCP.UI
         {
             var tw = AssistantBubbleTextWidth();
             DrawSelectableLabel($"✓ 脚本已保存: {msg.SavedScriptPath}", EditorStyles.wordWrappedLabel, tw);
-            
+
+            if (msg.CompileWaitCancelled)
+            {
+                DrawSelectableLabel("已取消联合生成。", EditorStyles.wordWrappedLabel, tw);
+                return;
+            }
+
+            if (msg.CompileWaitFinished)
+            {
+                DrawSelectableLabel("✓ 编译完成。", EditorStyles.wordWrappedLabel, tw);
+                return;
+            }
+
             var dots = new string('.', (msg.CompileWaitTicks / 10 % 4) + 1);
             var waitSeconds = msg.CompileWaitTicks * 0.1f;
-            
+
             DrawSelectableLabel($"⟳ 等待 Unity 编译完成{dots} ({waitSeconds:F1}秒)", EditorStyles.wordWrappedLabel, tw);
-            
+
             EditorGUILayout.Space(5);
             if (GUILayout.Button("取消联合生成", GUILayout.Width(150), GUILayout.Height(25)))
             {
-                // 取消后，该消息变更为成功（仅脚本）
-                msg.Type = MessageTypeEnum.SuccessResult;
+                msg.CompileWaitCancelled = true;
                 _isGenerating = false;
                 EditorApplication.update -= OnCompileWaitUpdate;
                 _pendingMessage = null;
+                AddTextBubble("已取消联合生成，仅保留已保存的脚本。");
+                PersistChatHistory();
+                Repaint();
                 ScrollToBottom();
             }
+
             Repaint();
         }
 
@@ -567,9 +576,10 @@ namespace UnityMCP.UI
             
             EditorGUILayout.Space(5);
 
-            if (msg.Mode == GenerateMode.SceneOps)
+            // 仅当本条仍是「带 envelope 的旧版单气泡成功态」时绘制只读按钮行；新版执行结果在独立气泡中，无 envelope。
+            if (msg.Mode == GenerateMode.SceneOps && msg.SceneOpsEnvelope != null)
                 DrawSceneOpsInlineActions(msg, readOnlySummary: true);
-            if (msg.Mode == GenerateMode.AssetOps)
+            if (msg.Mode == GenerateMode.AssetOps && msg.AssetOpsEnvelope != null)
                 DrawAssetOpsInlineActions(msg, readOnlySummary: true);
 
             if (!string.IsNullOrEmpty(msg.SavedScriptPath))

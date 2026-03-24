@@ -66,10 +66,9 @@ namespace UnityMCP.UI
             var result = ScriptGenerator.SaveScript(msg.ScriptName, msg.GeneratedCode);
             if (result.Success)
             {
-                msg.SavedScriptPath = result.FilePath;
-
                 if (msg.Mode == GenerateMode.CombinedPrefabFirst && !string.IsNullOrEmpty(msg.SavedPrefabPath))
                 {
+                    msg.SavedScriptPath = result.FilePath;
                     PrefabGenerator.ScheduleAttachScriptToPrefabAfterCompile(msg.SavedPrefabPath, msg.ScriptName);
                     // 保留原「第 2 步完成」气泡（仍为 CodeGenerated），另起一条最终成功气泡
                     var finalMsg = new ChatMessage
@@ -87,7 +86,7 @@ namespace UnityMCP.UI
                         CodeTokensUsed = msg.CodeTokensUsed,
                         CombinedPrefabFirst = true
                     };
-                    AddResultBubble(finalMsg);
+                    AddResultBubble(finalMsg, removeWaitingTextBubbles: false);
                     _isGenerating = false;
 
                     var placePath = _pendingPrefabPathForScenePlace;
@@ -103,8 +102,9 @@ namespace UnityMCP.UI
                     return;
                 }
 
-                msg.Type = MessageTypeEnum.SuccessResult;
+                AppendCodeSaveSuccessBubble(msg, result.FilePath);
                 _isGenerating = false;
+                PersistChatHistory();
                 Repaint();
                 ScrollToBottom();
             }
@@ -127,11 +127,10 @@ namespace UnityMCP.UI
 
             if (result.Success)
             {
-                msg.SavedPrefabPath = result.AssetPath;
-                msg.PrefabWarnings = result.Warnings;
-
                 if (msg.Mode == GenerateMode.CombinedPrefabFirst)
                 {
+                    msg.SavedPrefabPath = result.AssetPath;
+                    msg.PrefabWarnings = result.Warnings;
                     _combinedPrefabGenTime = msg.GenerationTime;
                     _combinedPrefabTokens = msg.TokensUsed;
                     _pendingPrefabPathForScenePlace = ContentRequestsScenePlacement(msg.Content)
@@ -155,20 +154,19 @@ namespace UnityMCP.UI
                     return;
                 }
 
-                msg.Type = MessageTypeEnum.SuccessResult;
-
                 if (msg.Mode == GenerateMode.Combined)
                 {
-                    // 把之前存的步骤1耗时信息放回msg，方便展示
                     msg.CodeGenerationTime = _combinedCodeGenTime;
                     msg.CodeTokensUsed = _combinedCodeTokens;
                 }
 
+                AppendPrefabSaveSuccessBubble(msg, result.AssetPath, result.Warnings);
                 _isGenerating = false;
 
                 if (ContentRequestsScenePlacement(msg.Content))
                     TryInstantiatePrefabInActiveScene(result.AssetPath);
 
+                PersistChatHistory();
                 Repaint();
                 ScrollToBottom();
             }
@@ -190,7 +188,6 @@ namespace UnityMCP.UI
                     return;
             }
 
-            // 存下步骤1的信息
             _combinedCodeGenTime = msg.GenerationTime;
             _combinedCodeTokens = msg.TokensUsed;
 
@@ -201,13 +198,30 @@ namespace UnityMCP.UI
                 return;
             }
 
-            // 修改原气泡类型为等待编译
             msg.SavedScriptPath = result.FilePath;
-            msg.Type = MessageTypeEnum.WaitingCompile;
-            msg.CompileWaitTicks = 0;
+            AppendCodeSaveSuccessBubble(msg, result.FilePath);
+
+            var waitMsg = new ChatMessage
+            {
+                Role = ChatRole.Assistant,
+                Type = MessageTypeEnum.WaitingCompile,
+                Mode = GenerateMode.Combined,
+                Content = msg.Content,
+                CodeType = msg.CodeType,
+                ScriptName = msg.ScriptName,
+                GeneratedCode = msg.GeneratedCode,
+                SavedScriptPath = result.FilePath,
+                GenerationTime = msg.GenerationTime,
+                TokensUsed = msg.TokensUsed,
+                CodeGenerationTime = _combinedCodeGenTime,
+                CodeTokensUsed = _combinedCodeTokens,
+                CompileWaitTicks = 0
+            };
+            _chatHistory.Add(waitMsg);
+            PersistChatHistory();
+
             _compilationDetected = false;
-            
-            _pendingMessage = msg;
+            _pendingMessage = waitMsg;
             EditorApplication.update += OnCompileWaitUpdate;
             Repaint();
             ScrollToBottom();
@@ -230,13 +244,13 @@ namespace UnityMCP.UI
             else if (_compilationDetected || _pendingMessage.CompileWaitTicks > 150)
             {
                 EditorApplication.update -= OnCompileWaitUpdate;
-                
-                // 编译完成后，新建一个气泡提示正在生成预制体
-                // 之前等待编译的气泡我们需要固定它的状态，这里可以直接将其移出或者保留一条“脚本已保存”文本
-                _pendingMessage.Type = MessageTypeEnum.SuccessResult; // 它变成了一个仅代码的成功节点
+
+                _pendingMessage.CompileWaitFinished = true;
+                PersistChatHistory();
+
                 var savedScript = _pendingMessage.SavedScriptPath;
                 var scriptName = _pendingMessage.ScriptName;
-                var content = _pendingMessage.Content; // 用户的原始输入
+                var content = _pendingMessage.Content;
 
                 _pendingMessage = new ChatMessage
                 {
@@ -244,7 +258,7 @@ namespace UnityMCP.UI
                     Mode = GenerateMode.Combined,
                     Content = content,
                     ScriptName = scriptName,
-                    SavedScriptPath = savedScript // 传递已保存的脚本路径
+                    SavedScriptPath = savedScript
                 };
 
                 AddTextBubble("⏳ 联合生成 (第2步): 编译完成，正在生成预制体...");
