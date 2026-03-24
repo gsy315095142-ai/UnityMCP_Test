@@ -175,6 +175,8 @@ namespace UnityMCP.UI
         /// <summary>是否在窗口右侧追加「API 日志」列（为 true 时加宽窗口，不压缩聊天列）。</summary>
         private bool _showAiDebugPanel;
         private Vector2 _debugLogScroll;
+        private int _aiDebugLogRevisionSynced = -1;
+        private string _aiDebugLogPanelText = "";
         /// <summary>当前帧左侧聊天列可用宽度（开启右侧日志后不含日志列），供气泡 MaxWidth 使用。</summary>
         private float _chatColumnInnerWidth = 600f;
         private AIServiceConfig? _config;
@@ -199,6 +201,7 @@ namespace UnityMCP.UI
         private GUIStyle? _chatTitleUserStyle;
         private GUIStyle? _chatTitleAssistantStyle;
         private GUIStyle? _assistantBubbleStyle;
+        private GUIStyle? _userBubbleStyle;
 
         /// <summary><see cref="AssetFolderLister"/> 缓存，工程变更时清空。</summary>
         private List<string>? _assetFoldersCache;
@@ -333,6 +336,21 @@ namespace UnityMCP.UI
                 };
                 _assistantBubbleStyle.normal.textColor = EditorStyles.label.normal.textColor;
             }
+
+            if (_userBubbleStyle == null)
+            {
+                _userBubbleStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
+                {
+                    richText = true,
+                    fontSize = 13,
+                    wordWrap = true,
+                    margin = new RectOffset(0, 0, 2, 2),
+                    padding = new RectOffset(0, 0, 0, 0)
+                };
+                _userBubbleStyle.normal.textColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.92f, 0.95f, 1f)
+                    : new Color(0.05f, 0.12f, 0.32f);
+            }
         }
 
         /// <summary>
@@ -409,15 +427,15 @@ namespace UnityMCP.UI
         private static Color ChatUserBubbleTint()
         {
             return EditorGUIUtility.isProSkin
-                ? new Color(0.38f, 0.58f, 0.92f, 0.42f)
-                : new Color(0.86f, 0.93f, 1f, 1f);
+                ? new Color(0.22f, 0.48f, 0.95f, 0.58f)
+                : new Color(0.55f, 0.76f, 1f, 0.92f);
         }
 
         private static Color ChatAssistantBubbleTint()
         {
             return EditorGUIUtility.isProSkin
-                ? new Color(0.48f, 0.55f, 0.58f, 0.38f)
-                : new Color(0.94f, 0.97f, 0.98f, 1f);
+                ? new Color(0.52f, 0.38f, 0.68f, 0.52f)
+                : new Color(0.98f, 0.94f, 0.86f, 1f);
         }
 
         private void OnGUI()
@@ -778,6 +796,7 @@ namespace UnityMCP.UI
             if (GUILayout.Button("清空", EditorStyles.miniButton, GUILayout.Width(44)))
             {
                 AiExchangeDebugLog.Clear();
+                _aiDebugLogRevisionSynced = -1;
                 Repaint();
             }
             if (GUILayout.Button("全部复制", EditorStyles.miniButton, GUILayout.Width(60)))
@@ -785,27 +804,31 @@ namespace UnityMCP.UI
             GUILayout.FlexibleSpace();
             GUILayout.Space(6f);
             EditorGUILayout.EndHorizontal();
-            EditorGUILayout.LabelField("每次调用的 Success / 错误 / 正文长度与预览", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("每次调用的 Success / 错误 / 正文长度与预览（可拖选后 Ctrl+C 复制）", EditorStyles.miniLabel);
             EditorGUILayout.Space(4f);
 
-            var text = AiExchangeDebugLog.GetText();
-            if (string.IsNullOrEmpty(text))
+            var rev = AiExchangeDebugLog.Revision;
+            if (rev != _aiDebugLogRevisionSynced)
             {
-                text = "尚无记录。\n\n发送需求后，此处会追加每次网络返回的摘要，便于排查空内容或解析失败。";
+                _aiDebugLogPanelText = AiExchangeDebugLog.GetText();
+                if (string.IsNullOrEmpty(_aiDebugLogPanelText))
+                    _aiDebugLogPanelText =
+                        "尚无记录。\n\n发送需求后，此处会追加每次网络返回的摘要，便于排查空内容或解析失败。";
+                _aiDebugLogRevisionSynced = rev;
             }
 
-            var st = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
+            var st = new GUIStyle(EditorStyles.textArea)
             {
                 wordWrap = true,
                 fontSize = 10,
                 richText = false
             };
             var contentW = Mathf.Max(64f, DebugPanelContentWidth - 12f);
-            var h = st.CalcHeight(new GUIContent(text), contentW);
-            h = Mathf.Clamp(h, 80f, 16000f);
+            var h = st.CalcHeight(new GUIContent(_aiDebugLogPanelText), contentW);
+            h = Mathf.Clamp(h, 120f, 120000f);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandHeight(true));
             _debugLogScroll = EditorGUILayout.BeginScrollView(_debugLogScroll, GUILayout.ExpandHeight(true));
-            EditorGUILayout.SelectableLabel(text, st, GUILayout.Width(contentW), GUILayout.Height(h));
+            _aiDebugLogPanelText = EditorGUILayout.TextArea(_aiDebugLogPanelText, st, GUILayout.Width(contentW), GUILayout.Height(h));
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndVertical();
@@ -853,7 +876,7 @@ namespace UnityMCP.UI
             GUILayout.FlexibleSpace();
 
             var bg = GUI.backgroundColor;
-            GUI.backgroundColor = Color.Lerp(Color.white, ChatUserBubbleTint(), EditorGUIUtility.isProSkin ? 0.82f : 0.52f);
+            GUI.backgroundColor = Color.Lerp(Color.white, ChatUserBubbleTint(), EditorGUIUtility.isProSkin ? 0.9f : 0.62f);
 
             EditorGUILayout.BeginVertical(_chatBubbleFrameStyle!,
                 GUILayout.MaxWidth(ChatUserBubbleMaxWidth()),
@@ -865,7 +888,7 @@ namespace UnityMCP.UI
             EditorGUILayout.LabelField("用户", _chatTitleUserStyle!, GUILayout.ExpandWidth(false));
             EditorGUILayout.EndHorizontal();
 
-            DrawSelectableLabel(msg.Content, _assistantBubbleStyle!, UserBubbleTextWidth());
+            DrawSelectableLabel(msg.Content, _userBubbleStyle!, UserBubbleTextWidth());
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
@@ -877,14 +900,14 @@ namespace UnityMCP.UI
             EditorGUILayout.BeginHorizontal();
 
             var bg = GUI.backgroundColor;
-            GUI.backgroundColor = Color.Lerp(Color.white, ChatAssistantBubbleTint(), EditorGUIUtility.isProSkin ? 0.82f : 0.5f);
+            GUI.backgroundColor = Color.Lerp(Color.white, ChatAssistantBubbleTint(), EditorGUIUtility.isProSkin ? 0.88f : 0.58f);
 
             EditorGUILayout.BeginVertical(_chatBubbleFrameStyle!,
                 GUILayout.MaxWidth(ChatAssistantBubbleMaxWidth()),
                 GUILayout.MinWidth(ChatAssistantBubbleMinWidth()));
             GUI.backgroundColor = bg;
 
-            EditorGUILayout.LabelField("AI 助手", _chatTitleAssistantStyle!, GUILayout.ExpandWidth(false));
+            EditorGUILayout.LabelField("LumiAI助手", _chatTitleAssistantStyle!, GUILayout.ExpandWidth(false));
 
             switch (msg.Type)
             {

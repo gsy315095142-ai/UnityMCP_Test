@@ -376,6 +376,31 @@ namespace UnityMCP.Tools
             }
         }
 
+        /// <summary>
+        /// 将当前活动场景写入磁盘（须已保存为 Assets 下 .unity；未命名场景会失败并提示）。
+        /// </summary>
+        public static SceneOperationResult SaveActiveSceneToDisk()
+        {
+            var scene = EditorSceneManager.GetActiveScene();
+            if (!scene.IsValid())
+                return SceneOperationResult.Fail("没有有效的活动场景。");
+
+            if (string.IsNullOrEmpty(scene.path))
+                return SceneOperationResult.Fail(
+                    "当前场景尚未保存为 .unity 文件。请先用 File → Save As… 将场景存到 Assets 目录，再执行保存。");
+
+            try
+            {
+                if (!EditorSceneManager.SaveScene(scene))
+                    return SceneOperationResult.Fail("SaveScene 返回 false（场景可能只读或路径无效）。");
+                return SceneOperationResult.Ok();
+            }
+            catch (Exception ex)
+            {
+                return SceneOperationResult.Fail($"保存场景失败: {ex.Message}");
+            }
+        }
+
         public static SceneOperationResult SetComponentPropertyByHierarchyPath(
             string hierarchyPath,
             string componentTypeName,

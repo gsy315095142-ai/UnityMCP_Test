@@ -18,6 +18,11 @@ namespace UnityMCP.UI
         private const int MaxTotalChars = 200_000;
         private const int MaxContentPreview = 16_000;
 
+        /// <summary>每次追加或清空时递增，供 UI 判断是否与视图缓存同步（避免每帧覆盖导致无法拖选复制）。</summary>
+        public static int Revision { get; private set; }
+
+        private static void BumpRevision() => Revision++;
+
         static AiExchangeDebugLog()
         {
             var s = SessionState.GetString(SessionKey, "");
@@ -29,6 +34,7 @@ namespace UnityMCP.UI
         {
             Buffer.Clear();
             SessionState.SetString(SessionKey, "");
+            BumpRevision();
         }
 
         private static void PersistSession()
@@ -66,6 +72,7 @@ namespace UnityMCP.UI
 
             Buffer.AppendLine("────────────────────────────────────────");
             PersistSession();
+            BumpRevision();
         }
 
         public static void AppendException(string phase, Exception ex)
@@ -75,6 +82,7 @@ namespace UnityMCP.UI
             Buffer.AppendLine(ex.ToString());
             Buffer.AppendLine("────────────────────────────────────────");
             PersistSession();
+            BumpRevision();
         }
 
         private static void TrimIfNeeded()

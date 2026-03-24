@@ -58,6 +58,7 @@ namespace UnityMCP.Tools
                 "instantiateprefab" => CheckInstantiatePrefab(op, scene, root, applySubtreeCap, prefabPrefix, hasPrefabPrefix,
                     out summary),
                 "openscene" => CheckOpenScene(out summary),
+                "savescene" => CheckSaveScene(out summary),
                 "destroy" => CheckPathOnly(op.path, "destroy", scene, root, applySubtreeCap, out summary),
                 "duplicate" => CheckPathOnly(op.path, "duplicate", scene, root, applySubtreeCap, out summary),
                 "setactive" => CheckPathOnly(op.path, "setActive", scene, root, applySubtreeCap, out summary),
@@ -72,6 +73,12 @@ namespace UnityMCP.Tools
         }
 
         private static bool CheckOpenScene(out string summary)
+        {
+            summary = "";
+            return true;
+        }
+
+        private static bool CheckSaveScene(out string summary)
         {
             summary = "";
             return true;
@@ -344,6 +351,7 @@ namespace UnityMCP.Tools
                 "setlayer" => $"setLayer — {op.path}",
                 "settag" => $"setTag — {op.path} → {op.gameObjectTag}",
                 "openscene" => $"openScene — {op.sceneAssetPath} (additive={op.openSceneAdditive})",
+                "savescene" => "saveScene — 保存当前活动场景到磁盘",
                 "setcomponentproperty" => $"setComponentProperty — {op.path} :: {op.typeName} . {op.serializedPropertyPath}",
                 "setrecttransform" => $"setRectTransform — {op.path}",
                 "setuitext" => $"setUiText — {op.path}",

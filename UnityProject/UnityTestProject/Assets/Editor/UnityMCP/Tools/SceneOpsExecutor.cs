@@ -83,6 +83,7 @@ namespace UnityMCP.Tools
                 "setlayer" => ExecSetLayer(op),
                 "settag" => ExecSetTag(op),
                 "openscene" => ExecOpenScene(op),
+                "savescene" => ExecSaveScene(op),
                 "setcomponentproperty" => ExecSetComponentProperty(op),
                 "setrecttransform" => ExecSetRectTransform(op),
                 "setuitext" => ExecSetUiText(op),
@@ -217,6 +218,11 @@ namespace UnityMCP.Tools
             if (string.IsNullOrWhiteSpace(op.sceneAssetPath))
                 return SceneOperationResult.Fail("openScene 需要 sceneAssetPath");
             return SceneEditorTools.OpenSceneByAssetPath(op.sceneAssetPath.Trim(), op.openSceneAdditive);
+        }
+
+        private static SceneOperationResult ExecSaveScene(SceneOperationDto _)
+        {
+            return SceneEditorTools.SaveActiveSceneToDisk();
         }
 
         private static SceneOperationResult ExecSetComponentProperty(SceneOperationDto op)

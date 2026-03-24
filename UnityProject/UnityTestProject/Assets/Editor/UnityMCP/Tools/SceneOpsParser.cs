@@ -42,6 +42,10 @@ namespace UnityMCP.Tools
             if (dto == null)
                 return SceneOpsParseResult.Fail("JSON 反序列化结果为 null", json);
 
+            // JsonUtility 在省略 unityOpsVersion 时得到 0；若已有 operations 则按 1 处理，减少模型漏写字段导致的解析失败。
+            if (dto.unityOpsVersion == 0 && dto.operations != null && dto.operations.Length > 0)
+                dto.unityOpsVersion = SupportedVersion;
+
             if (dto.unityOpsVersion != SupportedVersion)
             {
                 return SceneOpsParseResult.Fail(

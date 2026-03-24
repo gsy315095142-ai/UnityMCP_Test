@@ -25,7 +25,7 @@ namespace UnityMCP.Tools
     {
         /// <summary>
         /// 操作类型：createEmpty | setParent | addComponent | setTransform | instantiatePrefab | destroy | duplicate |
-        /// setActive | setLayer | setTag | openScene | setComponentProperty | setRectTransform | setUiText（大小写不敏感，允许下划线）。
+        /// setActive | setLayer | setTag | openScene | saveScene | setComponentProperty | setRectTransform | setUiText（大小写不敏感，允许下划线）。
         /// </summary>
         public string op = "";
 
