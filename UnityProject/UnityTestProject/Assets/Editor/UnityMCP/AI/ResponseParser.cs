@@ -17,14 +17,21 @@ namespace UnityMCP.AI
         public bool Success { get; set; }
         public GenerationRoute Route { get; set; }
         public CodeType CodeType { get; set; }
+        /// <summary>联合生成（both）时是否为先预制体再脚本。</summary>
+        public bool CombinedPrefabFirst { get; set; }
         public string? Error { get; set; }
         public string? RawJson { get; set; }
 
-        public static GenerationIntentResult Ok(GenerationRoute route, CodeType codeType, string? rawJson) => new()
+        public static GenerationIntentResult Ok(
+            GenerationRoute route,
+            CodeType codeType,
+            string? rawJson,
+            bool combinedPrefabFirst = false) => new()
         {
             Success = true,
             Route = route,
             CodeType = codeType,
+            CombinedPrefabFirst = combinedPrefabFirst,
             RawJson = rawJson ?? ""
         };
 
@@ -95,6 +102,8 @@ namespace UnityMCP.AI
         {
             public string? generationTarget;
             public string? codeType;
+            /// <summary>联合生成时步骤顺序：prefabFirst / codeFirst（可省略，默认 codeFirst）。</summary>
+            public string? combinedOrder;
         }
 
         /// <summary>
@@ -142,7 +151,21 @@ namespace UnityMCP.AI
             }
 
             var codeType = MapCodeTypeHint(parsed.codeType);
-            return GenerationIntentResult.Ok(route.Value, codeType, jsonText);
+            var prefabFirst = route == GenerationRoute.Both && MapCombinedOrderIsPrefabFirst(parsed.combinedOrder);
+            return GenerationIntentResult.Ok(route.Value, codeType, jsonText, prefabFirst);
+        }
+
+        private static bool MapCombinedOrderIsPrefabFirst(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return false;
+            var s = raw.Trim().ToLowerInvariant().Replace(" ", "").Replace("_", "");
+            if (s is "prefabfirst" or "prefab_first")
+                return true;
+            if (s.Contains("先预制", StringComparison.Ordinal) || s.Contains("先prefab", StringComparison.Ordinal))
+                return true;
+            return s.Contains("预制体先", StringComparison.Ordinal) || s.Contains("ui先", StringComparison.Ordinal) ||
+                   s.Contains("先ui", StringComparison.Ordinal);
         }
 
         private static GenerationRoute? MapGenerationTarget(string? raw)
@@ -211,6 +234,7 @@ namespace UnityMCP.AI
                 s = s.Substring(1);
             s = Regex.Replace(s, @"(?i)""generationtarget""\s*:", "\"generationTarget\":");
             s = Regex.Replace(s, @"(?i)""codetype""\s*:", "\"codeType\":");
+            s = Regex.Replace(s, @"(?i)""combinedorder""\s*:", "\"combinedOrder\":");
             for (var i = 0; i < 6; i++)
             {
                 var n = Regex.Replace(s, @",(\s*[\]}])", "$1");
@@ -633,7 +657,8 @@ namespace UnityMCP.AI
                 active = raw.active,
                 position = raw.position ?? new[] { 0f, 0f, 0f },
                 rotation = raw.rotation ?? new[] { 0f, 0f, 0f },
-                scale = raw.scale ?? new[] { 1f, 1f, 1f }
+                scale = raw.scale ?? new[] { 1f, 1f, 1f },
+                primitive = raw.primitive ?? ""
             };
 
             if (raw.components != null)
@@ -738,6 +763,8 @@ namespace UnityMCP.AI
             public float[]? position;
             public float[]? rotation;
             public float[]? scale;
+            /// <summary>Cube / Sphere / Capsule / Cylinder / Plane / Quad 等，与 PrimitiveType 一致</summary>
+            public string? primitive;
             public List<ComponentDescriptionRaw>? components;
             public List<GameObjectDescriptionRaw>? children;
         }

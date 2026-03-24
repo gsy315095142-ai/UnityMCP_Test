@@ -49,6 +49,7 @@ namespace UnityMCP.AI
   ""prefabName"": ""StaticCube"",
   ""rootObject"": {
     ""name"": ""CubeRoot"",
+    ""primitive"": ""Cube"",
     ""tag"": ""Untagged"",
     ""active"": true,
     ""position"": [0, 0, 0],
@@ -188,14 +189,17 @@ namespace Game.Generated
 JSON 格式（字段名必须一致）：
 {{
   ""generationTarget"": ""code"" | ""prefab"" | ""both"" | ""sceneOps"",
-  ""codeType"": ""auto"" | ""monobehaviour"" | ""scriptableobject"" | ""manager""
+  ""codeType"": ""auto"" | ""monobehaviour"" | ""scriptableobject"" | ""manager"",
+  ""combinedOrder"": ""prefabFirst"" | ""codeFirst""
 }}
+
+combinedOrder 仅当 generationTarget 为 ""both"" 时填写；可省略，省略等价于 ""codeFirst""（先代码后预制体）。若用户明确**先预制体再挂脚本 / 先 UI 再脚本**，必须填 ""prefabFirst""（避免先编译脚本导致域重载丢失会话）。
 
 判断规则（generationTarget）：
 - ""code""：用户主要需要 C# 脚本、类、逻辑、算法、配置数据类型（ScriptableObject）说明但仍在代码层面；或明确只要脚本不要预制体。
 - ""prefab""：用户主要描述**生成预制体资源（Prefab 资产）**、可被保存到 Project 的物体模板；或明确要「做成 prefab 文件」。**含 UI / 界面 / Canvas / 按钮 / 面板 / 菜单 等描述时，若未明确说「在当前场景 / Hierarchy 里搭建」「不要 prefab」，一律优先 prefab**（常见需求是生成可复用的 UI 预制体，而不是当场改打开的场景）。
 - ""sceneOps""：用户**明确**要在**当前正在编辑的场景**里直接改层级：创建空物体、改父节点、挂内置组件、改 Transform、把已有 .prefab **实例化进场景**；须体现「当前场景」「Hierarchy」「在场景根/某路径下建」「放到场景里」「给打开的场景加物体」等；仅有「做一个 UI」而无场景语境时**不要**选 sceneOps。
-- ""both""：用户同时需要「新脚本逻辑」和「可被实例化的预制体」，例如：带移动脚本的玩家预制体、挂接自定义 MonoBehaviour 的道具、需要挂载刚生成脚本的物体等。
+- ""both""：用户同时需要「新脚本逻辑」和「可被实例化的预制体」。若用户说**先预制体再脚本**、**先做 UI 再写脚本**、**先搭界面再加逻辑**，combinedOrder 须为 ""prefabFirst""。若未说明顺序，默认 ""codeFirst""（先代码后预制体）。
 
 codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""auto""）：
 - ""auto""：由后续代码生成步骤自动区分 MonoBehaviour / ScriptableObject / Manager
@@ -470,6 +474,11 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
   }}
 }}
 
+## 内置 3D 形体（重要）
+- 若用户要立方体、球体、胶囊、圆柱、平面等，请在 **rootObject**（或对应子物体）上设置 **primitive** 字段，值为 Unity 的 **PrimitiveType** 名称：**Cube**、**Sphere**、**Capsule**、**Cylinder**、**Plane**、**Quad**（大小写不敏感）。
+- 这样会使用引擎自带网格与碰撞体；**不要**仅用 MeshFilter+MeshRenderer 却不填 mesh（会导致 Mesh 为空）。
+- 若必须用 MeshFilter，可在 properties 里设置 **mesh** 为 **builtin:Cube**（或 Sphere 等）以引用内置网格。
+
 ## 组件类型名规则
 - 使用短名即可，如 Rigidbody、BoxCollider、MeshRenderer、Light、Camera 等
 - 支持的 3D 组件: Rigidbody, BoxCollider, SphereCollider, CapsuleCollider, MeshCollider, MeshFilter, MeshRenderer, SkinnedMeshRenderer, CharacterController, Animator, AudioSource, Light, Camera, NavMeshAgent, ParticleSystem
@@ -523,8 +532,10 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 
 {userRequest}
 
-重要：预制体必须挂载刚才生成的脚本组件 ""{scriptName}""，将它添加到 components 列表中。
-格式: {{""type"": ""{scriptName}"", ""properties"": {{}}}}
+重要：
+1. 预制体 **根物体** 的 components 里 **必须** 包含脚本组件，**type** 字段填 **C# 类名**（与刚生成的脚本里 **public class 后的名称完全一致**，含大小写）：""{scriptName}""
+2. 格式示例: {{""type"": ""{scriptName}"", ""properties"": {{}}}}
+3. 若联合流程里脚本已编译，保存预制体时会再尝试自动挂载该类；仍请你在 JSON 中写出该组件以便属性可配置。
 
 请直接输出 JSON（用 ```json 包裹），不要输出其他内容。";
         }

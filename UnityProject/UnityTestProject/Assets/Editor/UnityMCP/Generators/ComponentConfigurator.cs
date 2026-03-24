@@ -333,7 +333,28 @@ namespace UnityMCP.Generators
                 return LoadAsset<Material>(strVal);
 
             if (targetType == typeof(Mesh))
+            {
+                var sMesh = strVal.Trim();
+                if (sMesh.StartsWith("builtin:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var kind = sMesh.Substring("builtin:".Length).Trim();
+                    if (Enum.TryParse<PrimitiveType>(kind, true, out var pt))
+                    {
+                        var temp = GameObject.CreatePrimitive(pt);
+                        try
+                        {
+                            var mf = temp.GetComponent<MeshFilter>();
+                            return mf != null ? mf.sharedMesh : null;
+                        }
+                        finally
+                        {
+                            UnityEngine.Object.DestroyImmediate(temp);
+                        }
+                    }
+                }
+
                 return LoadAsset<Mesh>(strVal);
+            }
 
             if (targetType == typeof(Sprite))
                 return LoadAsset<Sprite>(strVal);

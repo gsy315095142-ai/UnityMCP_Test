@@ -46,6 +46,12 @@ namespace UnityMCP.Generators
         /// <summary>本地缩放</summary>
         public float[] scale = { 1, 1, 1 };
 
+        /// <summary>
+        /// 若填写 Unity 内置体素类型名（如 Cube、Sphere、Capsule、Cylinder、Plane、Quad），
+        /// 将用 GameObject.CreatePrimitive 创建，自带 Mesh/Collider，避免仅挂 MeshFilter 导致 mesh 为空。
+        /// </summary>
+        public string primitive = "";
+
         /// <summary>要添加的组件列表</summary>
         public List<ComponentDescription> components = new();
 

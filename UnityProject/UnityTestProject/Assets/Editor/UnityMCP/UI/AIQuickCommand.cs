@@ -47,7 +47,9 @@ namespace UnityMCP.UI
         Prefab = 2,
         Combined = 3,
         /// <summary>当前场景层级操控（unity-ops）</summary>
-        SceneOps = 4
+        SceneOps = 4,
+        /// <summary>联合生成：先预制体再脚本（仅 AI 判断可进入，避免先编译丢会话）</summary>
+        CombinedPrefabFirst = 5
     }
 
     /// <summary>
@@ -92,6 +94,9 @@ namespace UnityMCP.UI
 
         public int CompileWaitTicks;
 
+        /// <summary>联合生成且为先预制体再脚本（由 AI 判断 combinedOrder 决定）。</summary>
+        public bool CombinedPrefabFirst;
+
         // 快捷创建文本消息
         public static ChatMessage CreateText(ChatRole role, string text) => new()
         {
@@ -99,6 +104,37 @@ namespace UnityMCP.UI
             Type = MessageTypeEnum.Text,
             Content = text
         };
+
+        /// <summary>复制一条消息用于新气泡，避免多条 UI 共用同一引用被异步就地改写。</summary>
+        public static ChatMessage CloneSnapshot(ChatMessage a)
+        {
+            return new ChatMessage
+            {
+                Role = a.Role,
+                Type = a.Type,
+                Content = a.Content,
+                Mode = a.Mode,
+                CodeType = a.CodeType,
+                ErrorMessage = a.ErrorMessage,
+                GeneratedCode = a.GeneratedCode,
+                ScriptName = a.ScriptName,
+                PrefabDescription = a.PrefabDescription,
+                PrefabName = a.PrefabName,
+                RawJson = a.RawJson,
+                PrefabWarnings = new List<string>(a.PrefabWarnings),
+                SceneOpsEnvelope = a.SceneOpsEnvelope,
+                SceneOpsExecutedStepCount = a.SceneOpsExecutedStepCount,
+                SceneOpsSkippedStepCount = a.SceneOpsSkippedStepCount,
+                SavedScriptPath = a.SavedScriptPath,
+                SavedPrefabPath = a.SavedPrefabPath,
+                GenerationTime = a.GenerationTime,
+                TokensUsed = a.TokensUsed,
+                CodeGenerationTime = a.CodeGenerationTime,
+                CodeTokensUsed = a.CodeTokensUsed,
+                CompileWaitTicks = a.CompileWaitTicks,
+                CombinedPrefabFirst = a.CombinedPrefabFirst
+            };
+        }
     }
 
     /// <summary>
@@ -117,6 +153,11 @@ namespace UnityMCP.UI
 
         private List<ChatMessage> _chatHistory = new();
         private Vector2 _chatScrollPos;
+        /// <summary>是否在窗口右侧追加「API 日志」列（为 true 时加宽窗口，不压缩聊天列）。</summary>
+        private bool _showAiDebugPanel;
+        private Vector2 _debugLogScroll;
+        /// <summary>当前帧左侧聊天列可用宽度（开启右侧日志后不含日志列），供气泡 MaxWidth 使用。</summary>
+        private float _chatColumnInnerWidth = 600f;
         private AIServiceConfig? _config;
         
         // 运行状态：是否有后台任务正在执行
@@ -128,6 +169,8 @@ namespace UnityMCP.UI
         // 保存联合生成中步骤1耗时信息，用于最后汇总展示
         private float _combinedCodeGenTime;
         private int _combinedCodeTokens;
+        private float _combinedPrefabGenTime;
+        private int _combinedPrefabTokens;
 
         // UI 样式缓存（聊天气泡）
         private GUIStyle? _chatBubbleFrameStyle;
@@ -148,8 +191,8 @@ namespace UnityMCP.UI
             var window = GetWindow<AIQuickCommand>(utility: true);
             window.titleContent = new GUIContent(LumiAIProductInfo.WindowTitleWithVersion);
             window.minSize = new Vector2(600, 500);
-            window.maxSize = new Vector2(900, 800);
-            window.ResetAll();
+            // 不设死 maxSize：原先 900×800 会限制无法纵向拉高；与 Unity 默认一致用较大上限，便于随显示器拉高
+            window.maxSize = new Vector2(4000, 4000);
             window.ShowUtility();
             window.Focus();
         }
@@ -158,14 +201,31 @@ namespace UnityMCP.UI
         {
             titleContent = new GUIContent(LumiAIProductInfo.WindowTitleWithVersion);
             _config = AIServiceConfig.Load();
-            ResetAll();
+            if (!TryRestoreChatHistory())
+                _chatHistory.Clear();
             EditorApplication.projectChanged += InvalidateAssetFoldersCache;
         }
 
         private void OnDisable()
         {
+            PersistChatHistory();
             EditorApplication.update -= OnCompileWaitUpdate;
             EditorApplication.projectChanged -= InvalidateAssetFoldersCache;
+        }
+
+        private bool TryRestoreChatHistory()
+        {
+            var loaded = ChatHistoryPersistence.TryLoad();
+            if (loaded == null || loaded.Count == 0)
+                return false;
+            _chatHistory = loaded;
+            return true;
+        }
+
+        private void PersistChatHistory()
+        {
+            if (_chatHistory.Count > 0)
+                ChatHistoryPersistence.Save(_chatHistory);
         }
 
         private void InvalidateAssetFoldersCache()
@@ -184,6 +244,7 @@ namespace UnityMCP.UI
         {
             _userInput = "";
             _chatHistory.Clear();
+            ChatHistoryPersistence.Clear();
             _isGenerating = false;
             _pendingMessage = null;
             _compilationDetected = false;
@@ -253,19 +314,28 @@ namespace UnityMCP.UI
 
         /// <summary>
         /// IMGUI 的 LabelField / HelpBox 无法选中复制；用 SelectableLabel 支持鼠标拖选与 Ctrl+C/Ctrl+V（在可编辑区内）。
+        /// 按宽度计算多行高度，避免 SelectableLabel 默认单行裁切。
         /// </summary>
-        private static void DrawSelectableLabel(string text, GUIStyle style)
+        private void DrawSelectableLabel(string text, GUIStyle style, float contentWidth)
         {
             if (string.IsNullOrEmpty(text)) return;
-            EditorGUILayout.SelectableLabel(text, style, GUILayout.ExpandWidth(true));
+            var w = Mathf.Max(64f, contentWidth);
+            // miniLabel 等默认不换行时，CalcHeight 只算一行，需与绘制使用同一套 wordWrap
+            var drawStyle = style.wordWrap ? style : new GUIStyle(style) { wordWrap = true };
+            var h = drawStyle.CalcHeight(new GUIContent(text), w);
+            h = Mathf.Max(h, EditorGUIUtility.singleLineHeight);
+            EditorGUILayout.SelectableLabel(text, drawStyle, GUILayout.Width(w), GUILayout.Height(h));
         }
 
-        private static void DrawSelectableHelpPane(string text)
+        private void DrawSelectableHelpPane(string text, float contentWidth)
         {
             if (string.IsNullOrEmpty(text)) return;
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             var st = new GUIStyle(EditorStyles.wordWrappedMiniLabel) { wordWrap = true };
-            DrawSelectableLabel(text, st);
+            var w = Mathf.Max(64f, contentWidth);
+            var h = st.CalcHeight(new GUIContent(text), w);
+            h = Mathf.Max(h, EditorGUIUtility.singleLineHeight);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.SelectableLabel(text, st, GUILayout.Width(w), GUILayout.Height(h));
             EditorGUILayout.EndVertical();
         }
 
@@ -273,26 +343,45 @@ namespace UnityMCP.UI
         private float ChatUserBubbleMinWidth()
         {
             var max = ChatUserBubbleMaxWidth();
-            return Mathf.Clamp(max * 0.55f, 280f, max);
+            return Mathf.Clamp(max * 0.55f, 200f, max);
+        }
+
+        /// <summary>左侧聊天区域宽度（勿用整窗 position.width，否则会与右侧日志列重叠）。</summary>
+        private float ChatAreaWidthForLayout()
+        {
+            return Mathf.Max(_chatColumnInnerWidth, 200f);
         }
 
         private float ChatUserBubbleMaxWidth()
         {
-            var w = Mathf.Max(position.width, minSize.x);
-            return Mathf.Min(560f, (w - 56f) * 0.88f);
+            var w = Mathf.Max(ChatAreaWidthForLayout(), minSize.x);
+            // 随列宽变宽，接近聊天列全宽（仅留边距）
+            return Mathf.Clamp(w - 48f, 280f, 4096f);
         }
 
         private float ChatAssistantBubbleMinWidth()
         {
             var max = ChatAssistantBubbleMaxWidth();
-            return Mathf.Clamp(max * 0.45f, 240f, max);
+            return Mathf.Clamp(max * 0.45f, 200f, max);
         }
 
         private float ChatAssistantBubbleMaxWidth()
         {
-            var w = Mathf.Max(position.width, minSize.x);
-            return Mathf.Min(640f, (w - 40f) * 0.94f);
+            var w = Mathf.Max(ChatAreaWidthForLayout(), minSize.x);
+            return Mathf.Clamp(w - 48f, 280f, 4096f);
         }
+
+        /// <summary>气泡内正文可用宽度（扣除 helpBox 左右 padding）。</summary>
+        private float ChatBubbleContentWidth(float bubbleOuterMaxWidth)
+        {
+            InitStyles();
+            var pad = _chatBubbleFrameStyle!.padding.left + _chatBubbleFrameStyle.padding.right;
+            return Mathf.Max(80f, bubbleOuterMaxWidth - pad);
+        }
+
+        private float UserBubbleTextWidth() => ChatBubbleContentWidth(ChatUserBubbleMaxWidth());
+
+        private float AssistantBubbleTextWidth() => ChatBubbleContentWidth(ChatAssistantBubbleMaxWidth());
 
         private static Color ChatUserBubbleTint()
         {
@@ -311,17 +400,91 @@ namespace UnityMCP.UI
         private void OnGUI()
         {
             InitStyles();
-
-            EditorGUILayout.Space(5);
+            // 根纵向占满窗口高度，再横向分栏，右侧日志才能与左列同高、通顶通底。
+            EditorGUILayout.BeginVertical(GUILayout.ExpandHeight(true));
+            // 整窗横向：左列工具栏/工作区/聊天/输入；右列 API 日志通顶通底（与左列同高）。
+            EditorGUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
+            EditorGUILayout.BeginVertical(GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
             DrawToolbar();
+            // 须在工具栏之后：切换「API 日志」会改窗口宽度与 _showAiDebugPanel，再算聊天列宽才一致。
+            ApplyChatColumnWidthForCurrentLayout();
             EditorGUILayout.Space(5);
             DrawWorkspaceScopePanel();
             EditorGUILayout.Space(5);
-
             DrawChatHistory();
-
             EditorGUILayout.Space(5);
             DrawInputArea();
+            EditorGUILayout.EndVertical();
+            if (_showAiDebugPanel)
+            {
+                DrawChatDebugColumnSeparator();
+                DrawAiDebugSidePanel();
+            }
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+        }
+
+        private const float DebugPanelContentWidth = 276f;
+        private const float MainColumnGutter = 12f;
+
+        /// <summary>右侧日志列占用的水平宽度（与 DrawAiDebugSidePanel + 分隔条一致，用于加宽窗口）。</summary>
+        private static float DebugPanelTotalHorizontalWidth()
+        {
+            var panelOuter = DebugPanelContentWidth + 8f;
+            return MainColumnGutter + panelOuter;
+        }
+
+        /// <summary>打开/关闭 API 日志时加宽或收回窗口，使左侧聊天区宽度与打开前一致。</summary>
+        private void SetShowAiDebugPanel(bool show)
+        {
+            if (show == _showAiDebugPanel)
+                return;
+
+            var extra = DebugPanelTotalHorizontalWidth();
+            var r = position;
+            if (show)
+            {
+                r.width += extra;
+                position = r;
+                minSize = new Vector2(600f + extra, 500f);
+            }
+            else
+            {
+                r.width = Mathf.Max(600f, r.width - extra);
+                position = r;
+                minSize = new Vector2(600f, 500f);
+            }
+
+            _showAiDebugPanel = show;
+            Repaint();
+        }
+
+        private void ApplyChatColumnWidthForCurrentLayout()
+        {
+            const float hPad = 10f;
+            var full = Mathf.Max(position.width, minSize.x);
+            if (_showAiDebugPanel)
+            {
+                _chatColumnInnerWidth = Mathf.Max(
+                    260f,
+                    full - hPad * 2 - DebugPanelTotalHorizontalWidth());
+            }
+            else
+            {
+                _chatColumnInnerWidth = Mathf.Max(260f, full - hPad * 2);
+            }
+        }
+
+        private void DrawChatDebugColumnSeparator()
+        {
+            var r = GUILayoutUtility.GetRect(MainColumnGutter, 1f, GUILayout.ExpandHeight(true));
+            var h = r.height > 4f ? r.height : Mathf.Max(100f, position.height - 140f);
+            var y0 = r.yMin;
+            var lineX = r.x + MainColumnGutter * 0.5f - 0.5f;
+            var col = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.14f)
+                : new Color(0f, 0f, 0f, 0.12f);
+            EditorGUI.DrawRect(new Rect(lineX, y0, 1f, h), col);
         }
 
         private void DrawToolbar()
@@ -329,9 +492,13 @@ namespace UnityMCP.UI
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             
             EditorGUILayout.LabelField("模式:", GUILayout.Width(40));
-            _currentMode = (GenerateMode)EditorGUILayout.Popup((int)_currentMode, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(128));
+            var toolbarMode = _currentMode == GenerateMode.CombinedPrefabFirst ? GenerateMode.Combined : _currentMode;
+            var newToolbarMode = (GenerateMode)EditorGUILayout.Popup((int)toolbarMode, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(128));
+            if (newToolbarMode != toolbarMode)
+                _currentMode = newToolbarMode;
 
-            if (_currentMode == GenerateMode.Code || _currentMode == GenerateMode.Combined)
+            if (_currentMode == GenerateMode.Code || _currentMode == GenerateMode.Combined ||
+                _currentMode == GenerateMode.CombinedPrefabFirst)
             {
                 EditorGUILayout.Space(10);
                 EditorGUILayout.LabelField("代码类型:", GUILayout.Width(60));
@@ -344,6 +511,14 @@ namespace UnityMCP.UI
             }
 
             GUILayout.FlexibleSpace();
+
+            var debugToggle = GUILayout.Toggle(
+                _showAiDebugPanel,
+                new GUIContent("API 日志", "在窗口右侧通顶通底一列；窗口会加宽，聊天区域宽度保持不变"),
+                EditorStyles.toolbarButton,
+                GUILayout.Width(72));
+            if (debugToggle != _showAiDebugPanel)
+                SetShowAiDebugPanel(debugToggle);
 
             if (GUILayout.Button("清空历史", EditorStyles.toolbarButton, GUILayout.Width(70)))
             {
@@ -516,6 +691,64 @@ namespace UnityMCP.UI
             return ProjectContext.Collect().PrefabOutputPath;
         }
 
+        private void LogAiExchange(string phase, AIResponse response, string? note = null)
+        {
+            AiExchangeDebugLog.AppendExchange(phase, response, note);
+            Repaint();
+        }
+
+        private void DrawAiDebugSidePanel()
+        {
+            var panelOuterW = DebugPanelContentWidth + 8f;
+            var headerBg = EditorGUIUtility.isProSkin
+                ? new Color(0.22f, 0.22f, 0.24f, 0.95f)
+                : new Color(0.93f, 0.93f, 0.95f, 1f);
+
+            EditorGUILayout.BeginVertical(GUILayout.Width(panelOuterW), GUILayout.ExpandHeight(true));
+            var headerRect = EditorGUILayout.GetControlRect(false, 26f);
+            EditorGUI.DrawRect(headerRect, headerBg);
+            GUI.Label(
+                new Rect(headerRect.x + 8f, headerRect.y + 4f, headerRect.width - 16f, 18f),
+                "API 请求日志",
+                EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Space(6f);
+            if (GUILayout.Button("清空", EditorStyles.miniButton, GUILayout.Width(44)))
+            {
+                AiExchangeDebugLog.Clear();
+                Repaint();
+            }
+            if (GUILayout.Button("全部复制", EditorStyles.miniButton, GUILayout.Width(60)))
+                EditorGUIUtility.systemCopyBuffer = AiExchangeDebugLog.GetText();
+            GUILayout.FlexibleSpace();
+            GUILayout.Space(6f);
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.LabelField("每次调用的 Success / 错误 / 正文长度与预览", EditorStyles.miniLabel);
+            EditorGUILayout.Space(4f);
+
+            var text = AiExchangeDebugLog.GetText();
+            if (string.IsNullOrEmpty(text))
+            {
+                text = "尚无记录。\n\n发送需求后，此处会追加每次网络返回的摘要，便于排查空内容或解析失败。";
+            }
+
+            var st = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
+            {
+                wordWrap = true,
+                fontSize = 10,
+                richText = false
+            };
+            var contentW = Mathf.Max(64f, DebugPanelContentWidth - 12f);
+            var h = st.CalcHeight(new GUIContent(text), contentW);
+            h = Mathf.Clamp(h, 80f, 16000f);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandHeight(true));
+            _debugLogScroll = EditorGUILayout.BeginScrollView(_debugLogScroll, GUILayout.ExpandHeight(true));
+            EditorGUILayout.SelectableLabel(text, st, GUILayout.Width(contentW), GUILayout.Height(h));
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.EndVertical();
+        }
+
         private void DrawChatHistory()
         {
             _chatScrollPos = EditorGUILayout.BeginScrollView(_chatScrollPos, GUILayout.ExpandHeight(true));
@@ -570,7 +803,7 @@ namespace UnityMCP.UI
             EditorGUILayout.LabelField("用户", _chatTitleUserStyle!, GUILayout.ExpandWidth(false));
             EditorGUILayout.EndHorizontal();
 
-            DrawSelectableLabel(msg.Content, _assistantBubbleStyle!);
+            DrawSelectableLabel(msg.Content, _assistantBubbleStyle!, UserBubbleTextWidth());
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
@@ -594,7 +827,7 @@ namespace UnityMCP.UI
             switch (msg.Type)
             {
                 case MessageTypeEnum.Text:
-                    DrawSelectableLabel(msg.Content, _assistantBubbleStyle!);
+                    DrawSelectableLabel(msg.Content, _assistantBubbleStyle!, AssistantBubbleTextWidth());
                     if (msg.Content.Contains("⏳")) Repaint(); // 如果是等待中，刷新UI
                     break;
                 case MessageTypeEnum.CodeGenerated:
@@ -671,9 +904,20 @@ namespace UnityMCP.UI
 
         private void DrawCodeGeneratedState(ChatMessage msg)
         {
-            string title = msg.Mode == GenerateMode.Combined ? "✅ <b>第 1 步完成</b>: 代码已生成！" : "✅ 代码已生成！";
-            DrawSelectableLabel(title, _assistantBubbleStyle!);
-            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
+            var tw = AssistantBubbleTextWidth();
+            string title = msg.Mode switch
+            {
+                GenerateMode.CombinedPrefabFirst => "✅ <b>第 2 步完成</b>: 代码已生成！",
+                GenerateMode.Combined => "✅ <b>第 1 步完成</b>: 代码已生成！",
+                _ => "✅ 代码已生成！"
+            };
+            DrawSelectableLabel(title, _assistantBubbleStyle!, tw);
+            if (msg.Mode == GenerateMode.CombinedPrefabFirst)
+                DrawSelectableLabel(
+                    $"代码步骤: {msg.CodeGenerationTime:F1}秒 | Token: {msg.CodeTokensUsed}（预制体步骤: {msg.GenerationTime:F1}s / {msg.TokensUsed} tok）",
+                    EditorStyles.miniLabel, tw);
+            else
+                DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel, tw);
             
             EditorGUILayout.Space(5);
             EditorGUILayout.BeginHorizontal();
@@ -684,7 +928,7 @@ namespace UnityMCP.UI
 
             if (ScriptGenerator.ScriptExists(msg.ScriptName))
             {
-                DrawSelectableHelpPane($"文件 {msg.ScriptName}.cs 已存在，保存将覆盖");
+                DrawSelectableHelpPane($"文件 {msg.ScriptName}.cs 已存在，保存将覆盖", tw);
             }
 
             EditorGUILayout.Space(5);
@@ -714,9 +958,15 @@ namespace UnityMCP.UI
 
         private void DrawPrefabGeneratedState(ChatMessage msg)
         {
-            string title = msg.Mode == GenerateMode.Combined ? "✅ <b>第 2 步完成</b>: 预制体已生成！" : "✅ 预制体已生成！";
-            DrawSelectableLabel(title, _assistantBubbleStyle!);
-            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
+            var tw = AssistantBubbleTextWidth();
+            string title = msg.Mode switch
+            {
+                GenerateMode.CombinedPrefabFirst => "✅ <b>第 1 步完成</b>: 预制体已生成！",
+                GenerateMode.Combined => "✅ <b>第 2 步完成</b>: 预制体已生成！",
+                _ => "✅ 预制体已生成！"
+            };
+            DrawSelectableLabel(title, _assistantBubbleStyle!, tw);
+            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel, tw);
 
             EditorGUILayout.Space(5);
             EditorGUILayout.BeginHorizontal();
@@ -726,10 +976,10 @@ namespace UnityMCP.UI
             EditorGUILayout.EndHorizontal();
 
             var saveDir = ResolvePrefabSaveFolder();
-            DrawSelectableLabel($"保存目录: {saveDir}/", EditorStyles.miniLabel);
+            DrawSelectableLabel($"保存目录: {saveDir}/", EditorStyles.miniLabel, tw);
 
             if (PrefabGenerator.PrefabExists(msg.PrefabName, saveDir))
-                DrawSelectableHelpPane($"预制体 {msg.PrefabName}.prefab 已存在，保存将覆盖");
+                DrawSelectableHelpPane($"预制体 {msg.PrefabName}.prefab 已存在，保存将覆盖", tw);
 
             EditorGUILayout.Space(5);
             EditorGUILayout.BeginHorizontal();
@@ -760,13 +1010,14 @@ namespace UnityMCP.UI
 
         private void DrawSceneOpsReadyState(ChatMessage msg)
         {
-            DrawSelectableLabel("✅ 场景操控列表已生成（请预览后执行）", _assistantBubbleStyle!);
-            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel);
+            var tw = AssistantBubbleTextWidth();
+            DrawSelectableLabel("✅ 场景操控列表已生成（请预览后执行）", _assistantBubbleStyle!, tw);
+            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel, tw);
 
             if (msg.SceneOpsEnvelope != null)
             {
                 EditorGUILayout.Space(4);
-                DrawSelectableLabel(BuildSceneOpsStepSummary(msg.SceneOpsEnvelope), EditorStyles.wordWrappedMiniLabel);
+                DrawSelectableLabel(BuildSceneOpsStepSummary(msg.SceneOpsEnvelope), EditorStyles.wordWrappedMiniLabel, tw);
             }
 
             EditorGUILayout.Space(5);
@@ -786,12 +1037,13 @@ namespace UnityMCP.UI
 
         private void DrawWaitingCompileState(ChatMessage msg)
         {
-            DrawSelectableLabel($"✓ 脚本已保存: {msg.SavedScriptPath}", EditorStyles.wordWrappedLabel);
+            var tw = AssistantBubbleTextWidth();
+            DrawSelectableLabel($"✓ 脚本已保存: {msg.SavedScriptPath}", EditorStyles.wordWrappedLabel, tw);
             
             var dots = new string('.', (msg.CompileWaitTicks / 10 % 4) + 1);
             var waitSeconds = msg.CompileWaitTicks * 0.1f;
             
-            DrawSelectableLabel($"⟳ 等待 Unity 编译完成{dots} ({waitSeconds:F1}秒)", EditorStyles.wordWrappedLabel);
+            DrawSelectableLabel($"⟳ 等待 Unity 编译完成{dots} ({waitSeconds:F1}秒)", EditorStyles.wordWrappedLabel, tw);
             
             EditorGUILayout.Space(5);
             if (GUILayout.Button("取消联合生成", GUILayout.Width(150), GUILayout.Height(25)))
@@ -808,34 +1060,36 @@ namespace UnityMCP.UI
 
         private void DrawSuccessState(ChatMessage msg)
         {
+            var tw = AssistantBubbleTextWidth();
             string text = msg.Mode switch
             {
                 GenerateMode.SceneOps => "🎉 场景操控执行成功！",
                 GenerateMode.Combined when !string.IsNullOrEmpty(msg.SavedPrefabPath) => "🎉 联合生成最终完成！",
+                GenerateMode.CombinedPrefabFirst when !string.IsNullOrEmpty(msg.SavedPrefabPath) && !string.IsNullOrEmpty(msg.SavedScriptPath) => "🎉 联合生成最终完成！",
                 GenerateMode.Code => "🎉 代码生成并保存成功！",
                 _ => "🎉 预制体生成并保存成功！"
             };
                 
-            DrawSelectableLabel($"<b>{text}</b>", _assistantBubbleStyle!);
+            DrawSelectableLabel($"<b>{text}</b>", _assistantBubbleStyle!, tw);
             
             EditorGUILayout.Space(5);
 
             if (!string.IsNullOrEmpty(msg.SavedScriptPath))
-                DrawSelectableLabel($"已生成脚本: {msg.SavedScriptPath}", EditorStyles.miniLabel);
+                DrawSelectableLabel($"已生成脚本: {msg.SavedScriptPath}", EditorStyles.miniLabel, tw);
             
             if (!string.IsNullOrEmpty(msg.SavedPrefabPath))
-                DrawSelectableLabel($"已生成预制体: {msg.SavedPrefabPath}", EditorStyles.miniLabel);
+                DrawSelectableLabel($"已生成预制体: {msg.SavedPrefabPath}", EditorStyles.miniLabel, tw);
 
             if (msg.Mode == GenerateMode.SceneOps)
                 DrawSelectableLabel(
                     $"场景操控：已执行 {msg.SceneOpsExecutedStepCount} 步，跳过 {msg.SceneOpsSkippedStepCount} 步（工作区确认）",
-                    EditorStyles.miniLabel);
+                    EditorStyles.miniLabel, tw);
 
             if (msg.PrefabWarnings.Count > 0)
             {
                 EditorGUILayout.Space(2);
                 foreach (var w in msg.PrefabWarnings)
-                    DrawSelectableHelpPane(w);
+                    DrawSelectableHelpPane(w, tw);
             }
 
             EditorGUILayout.Space(5);
@@ -862,9 +1116,10 @@ namespace UnityMCP.UI
 
         private void DrawErrorState(ChatMessage msg)
         {
-            DrawSelectableLabel("❌ <b>生成失败</b>", _assistantBubbleStyle!);
+            var tw = AssistantBubbleTextWidth();
+            DrawSelectableLabel("❌ <b>生成失败</b>", _assistantBubbleStyle!, tw);
             if (!string.IsNullOrEmpty(msg.ErrorMessage))
-                DrawSelectableHelpPane(msg.ErrorMessage);
+                DrawSelectableHelpPane(msg.ErrorMessage, tw);
             
             EditorGUILayout.Space(5);
             if (GUILayout.Button("重试此任务", GUILayout.Width(100), GUILayout.Height(25)))
@@ -887,6 +1142,7 @@ namespace UnityMCP.UI
 
             // 用户输入气泡
             _chatHistory.Add(ChatMessage.CreateText(ChatRole.User, userText));
+            PersistChatHistory();
             ScrollToBottom();
 
             // 创建执行上下文
@@ -947,6 +1203,10 @@ namespace UnityMCP.UI
                     AddTextBubble("⏳ 联合生成 (第1步): 正在生成代码，请稍候...");
                     GenerateCodeAsync(context);
                     break;
+                case GenerateMode.CombinedPrefabFirst:
+                    AddTextBubble("⏳ 联合生成 (第1步): 正在生成预制体，请稍候...");
+                    GeneratePrefabAsync(context);
+                    break;
                 case GenerateMode.SceneOps:
                     AddTextBubble("⏳ 正在生成场景操控列表，请稍候...");
                     GenerateSceneOpsAsync(context);
@@ -962,6 +1222,7 @@ namespace UnityMCP.UI
             
             var msg = ChatMessage.CreateText(ChatRole.Assistant, text);
             _chatHistory.Add(msg);
+            PersistChatHistory();
             ScrollToBottom();
         }
 
@@ -969,15 +1230,19 @@ namespace UnityMCP.UI
         {
             // 同样移除等待中的文本气泡
             _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
+            // 同一条实例不应出现两次，否则阶段切换时一处改 Type/Content 会牵动所有气泡
+            if (_chatHistory.Contains(msg))
+                msg = ChatMessage.CloneSnapshot(msg);
             _chatHistory.Add(msg);
+            PersistChatHistory();
             ScrollToBottom();
         }
 
-        private static GenerateMode MapRouteToMode(GenerationRoute route) => route switch
+        private static GenerateMode MapRouteToMode(GenerationRoute route, bool combinedPrefabFirst) => route switch
         {
             GenerationRoute.Code => GenerateMode.Code,
             GenerationRoute.Prefab => GenerateMode.Prefab,
-            GenerationRoute.Both => GenerateMode.Combined,
+            GenerationRoute.Both => combinedPrefabFirst ? GenerateMode.CombinedPrefabFirst : GenerateMode.Combined,
             GenerationRoute.SceneOps => GenerateMode.SceneOps,
             _ => GenerateMode.Code
         };
@@ -987,6 +1252,7 @@ namespace UnityMCP.UI
             GenerateMode.Code => "生成代码",
             GenerateMode.Prefab => "生成预制体",
             GenerateMode.Combined => "联合生成（代码 + 预制体）",
+            GenerateMode.CombinedPrefabFirst => "联合生成（先预制体 + 脚本）",
             GenerateMode.SceneOps => "场景操控（unity-ops）",
             _ => mode.ToString()
         };
@@ -1013,6 +1279,7 @@ namespace UnityMCP.UI
                 var userPrompt = PromptBuilder.BuildIntentRouteUserPrompt(context.Content);
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange("意图路由", response, $"memoryTurns={memory?.Count ?? 0}");
 
                 if (!response.Success)
                 {
@@ -1035,8 +1302,9 @@ namespace UnityMCP.UI
                     return;
                 }
 
-                var resolvedMode = MapRouteToMode(intent.Route);
+                var resolvedMode = MapRouteToMode(intent.Route, intent.CombinedPrefabFirst);
                 context.Mode = resolvedMode;
+                context.CombinedPrefabFirst = intent.CombinedPrefabFirst;
                 context.CodeType = intent.CodeType;
 
                 _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
@@ -1045,6 +1313,8 @@ namespace UnityMCP.UI
                 var codeHint = resolvedMode != GenerateMode.Prefab && resolvedMode != GenerateMode.SceneOps
                     ? $"（代码类型：{PromptBuilder.CodeTypeLabels[(int)intent.CodeType]}）"
                     : "";
+                if (resolvedMode == GenerateMode.CombinedPrefabFirst)
+                    codeHint += "（顺序：先预制体 → 再脚本）";
                 AddTextBubble($"根据需求判断为：<b>{label}</b> {codeHint}");
 
                 switch (resolvedMode)
@@ -1061,6 +1331,10 @@ namespace UnityMCP.UI
                         AddTextBubble("⏳ 联合生成 (第1步): 正在生成代码，请稍候...");
                         GenerateCodeAsync(context);
                         break;
+                    case GenerateMode.CombinedPrefabFirst:
+                        AddTextBubble("⏳ 联合生成 (第1步): 正在生成预制体，请稍候...");
+                        GeneratePrefabAsync(context);
+                        break;
                     case GenerateMode.SceneOps:
                         AddTextBubble("⏳ 正在生成场景操控列表，请稍候...");
                         GenerateSceneOpsAsync(context);
@@ -1075,6 +1349,7 @@ namespace UnityMCP.UI
             }
             catch (Exception ex)
             {
+                AiExchangeDebugLog.AppendException("意图路由", ex);
                 context.ErrorMessage = $"判断需求类型时出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
@@ -1106,6 +1381,7 @@ namespace UnityMCP.UI
                 var userPrompt = PromptBuilder.BuildCodeUserPrompt(context.Content);
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange("生成代码", response, $"CodeType={context.CodeType}, memoryTurns={memory?.Count ?? 0}");
 
                 if (!response.Success)
                 {
@@ -1131,14 +1407,25 @@ namespace UnityMCP.UI
 
                 context.GeneratedCode = parseResult.Code;
                 context.ScriptName = parseResult.ScriptName;
-                context.GenerationTime = response.Duration;
-                context.TokensUsed = response.TokensUsed;
-                
+                if (context.Mode == GenerateMode.CombinedPrefabFirst)
+                {
+                    context.CodeGenerationTime = response.Duration;
+                    context.CodeTokensUsed = response.TokensUsed;
+                    context.GenerationTime = _combinedPrefabGenTime;
+                    context.TokensUsed = _combinedPrefabTokens;
+                }
+                else
+                {
+                    context.GenerationTime = response.Duration;
+                    context.TokensUsed = response.TokensUsed;
+                }
+
                 context.Type = MessageTypeEnum.CodeGenerated;
                 AddResultBubble(context);
             }
             catch (Exception ex)
             {
+                AiExchangeDebugLog.AppendException("生成代码", ex);
                 context.ErrorMessage = $"生成过程中出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
@@ -1167,12 +1454,16 @@ namespace UnityMCP.UI
                 var projContext = ProjectContext.Collect();
 
                 string systemPrompt = PromptBuilder.BuildPrefabSystemPrompt(projContext);
-                string userPrompt = context.Mode == GenerateMode.Combined 
+                string userPrompt = context.Mode == GenerateMode.Combined
                     ? PromptBuilder.BuildCombinedPrefabUserPrompt(context.Content, context.ScriptName)
                     : PromptBuilder.BuildPrefabUserPrompt(context.Content);
 
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange(
+                    "生成预制体",
+                    response,
+                    $"Mode={context.Mode}, ScriptName={context.ScriptName ?? "-"}, memoryTurns={memory?.Count ?? 0}");
 
                 if (!response.Success)
                 {
@@ -1207,6 +1498,7 @@ namespace UnityMCP.UI
             }
             catch (Exception ex)
             {
+                AiExchangeDebugLog.AppendException("生成预制体", ex);
                 context.ErrorMessage = $"生成过程中出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
@@ -1241,6 +1533,7 @@ namespace UnityMCP.UI
 
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange("场景操控 JSON", response, $"memoryTurns={memory?.Count ?? 0}");
 
                 if (!response.Success)
                 {
@@ -1272,6 +1565,7 @@ namespace UnityMCP.UI
             }
             catch (Exception ex)
             {
+                AiExchangeDebugLog.AppendException("场景操控 JSON", ex);
                 context.ErrorMessage = $"生成场景操控列表时出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
@@ -1428,6 +1722,9 @@ namespace UnityMCP.UI
                 msg.SavedScriptPath = result.FilePath;
                 msg.Type = MessageTypeEnum.SuccessResult;
                 _isGenerating = false;
+
+                if (msg.Mode == GenerateMode.CombinedPrefabFirst && !string.IsNullOrEmpty(msg.SavedPrefabPath))
+                    PrefabGenerator.ScheduleAttachScriptToPrefabAfterCompile(msg.SavedPrefabPath, msg.ScriptName);
                 
                 // 为了让用户注意到结果，我们可以新发一条最终结果气泡，原气泡可以直接变成提示或保留
                 // 这里我们选择把这个气泡的Type转换为Success，它会自动渲染成最终结果UI
@@ -1445,14 +1742,40 @@ namespace UnityMCP.UI
             if (msg.PrefabDescription == null || string.IsNullOrEmpty(msg.PrefabName)) return;
 
             msg.PrefabDescription.prefabName = msg.PrefabName;
-            var result = PrefabGenerator.Generate(msg.PrefabDescription, ResolvePrefabSaveFolder());
+            var ensureScript = !string.IsNullOrEmpty(msg.ScriptName) &&
+                               (msg.Mode == GenerateMode.Combined || msg.Mode == GenerateMode.CombinedPrefabFirst)
+                ? msg.ScriptName
+                : null;
+            var result = PrefabGenerator.Generate(msg.PrefabDescription, ResolvePrefabSaveFolder(), ensureScript);
 
             if (result.Success)
             {
                 msg.SavedPrefabPath = result.AssetPath;
                 msg.PrefabWarnings = result.Warnings;
+
+                if (msg.Mode == GenerateMode.CombinedPrefabFirst)
+                {
+                    _combinedPrefabGenTime = msg.GenerationTime;
+                    _combinedPrefabTokens = msg.TokensUsed;
+                    AddTextBubble("⏳ 联合生成 (第2步): 正在生成代码...");
+                    // 第二步必须用新实例：msg 已在历史中，不能再让 GenerateCodeAsync 就地改写同一引用
+                    var codePhase = new ChatMessage
+                    {
+                        Role = ChatRole.Assistant,
+                        Mode = GenerateMode.CombinedPrefabFirst,
+                        Content = msg.Content,
+                        CodeType = msg.CodeType,
+                        CombinedPrefabFirst = true,
+                        SavedPrefabPath = msg.SavedPrefabPath
+                    };
+                    GenerateCodeAsync(codePhase);
+                    Repaint();
+                    ScrollToBottom();
+                    return;
+                }
+
                 msg.Type = MessageTypeEnum.SuccessResult;
-                
+
                 if (msg.Mode == GenerateMode.Combined)
                 {
                     // 把之前存的步骤1耗时信息放回msg，方便展示
