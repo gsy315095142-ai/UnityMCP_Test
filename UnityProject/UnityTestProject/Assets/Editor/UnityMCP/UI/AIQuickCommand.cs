@@ -49,7 +49,9 @@ namespace UnityMCP.UI
         /// <summary>当前场景层级操控（unity-ops）</summary>
         SceneOps = 4,
         /// <summary>联合生成：先预制体再脚本（仅 AI 判断可进入，避免先编译丢会话）</summary>
-        CombinedPrefabFirst = 5
+        CombinedPrefabFirst = 5,
+        /// <summary>基于项目扫描结果回答（盘点预制体、已有资源等），不生成新资源</summary>
+        ProjectQuery = 6
     }
 
     /// <summary>
@@ -142,7 +144,7 @@ namespace UnityMCP.UI
     /// </summary>
     public class AIQuickCommand : EditorWindow
     {
-        private static readonly string[] MODE_LABELS = { "AI判断", "生成代码", "生成预制体", "联合生成", "场景操控" };
+        private static readonly string[] MODE_LABELS = { "AI判断", "生成代码", "生成预制体", "联合生成", "场景操控", "项目查询" };
 
         #region Fields
 
@@ -171,6 +173,9 @@ namespace UnityMCP.UI
         private int _combinedCodeTokens;
         private float _combinedPrefabGenTime;
         private int _combinedPrefabTokens;
+
+        /// <summary>先预制体再脚本流程：用户要求「放入当前场景」时，在脚本保存成功后实例化此前保存的预制体。</summary>
+        private string? _pendingPrefabPathForScenePlace;
 
         // UI 样式缓存（聊天气泡）
         private GUIStyle? _chatBubbleFrameStyle;
@@ -249,6 +254,7 @@ namespace UnityMCP.UI
             _pendingMessage = null;
             _compilationDetected = false;
             EditorApplication.update -= OnCompileWaitUpdate;
+            _pendingPrefabPathForScenePlace = null;
         }
 
         #endregion
@@ -492,10 +498,10 @@ namespace UnityMCP.UI
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             
             EditorGUILayout.LabelField("模式:", GUILayout.Width(40));
-            var toolbarMode = _currentMode == GenerateMode.CombinedPrefabFirst ? GenerateMode.Combined : _currentMode;
-            var newToolbarMode = (GenerateMode)EditorGUILayout.Popup((int)toolbarMode, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(128));
-            if (newToolbarMode != toolbarMode)
-                _currentMode = newToolbarMode;
+            var toolbarIdx = GetToolbarPopupIndex();
+            var newToolbarIdx = EditorGUILayout.Popup(toolbarIdx, MODE_LABELS, EditorStyles.toolbarPopup, GUILayout.Width(128));
+            if (newToolbarIdx != toolbarIdx)
+                SetModeFromToolbarPopupIndex(newToolbarIdx);
 
             if (_currentMode == GenerateMode.Code || _currentMode == GenerateMode.Combined ||
                 _currentMode == GenerateMode.CombinedPrefabFirst)
@@ -508,6 +514,11 @@ namespace UnityMCP.UI
             {
                 EditorGUILayout.Space(10);
                 EditorGUILayout.LabelField("(代码类型由 AI 判断)", EditorStyles.miniLabel, GUILayout.Width(140));
+            }
+            else if (_currentMode == GenerateMode.ProjectQuery)
+            {
+                EditorGUILayout.Space(10);
+                EditorGUILayout.LabelField("(基于项目扫描数据回答)", EditorStyles.miniLabel, GUILayout.Width(160));
             }
 
             GUILayout.FlexibleSpace();
@@ -526,6 +537,20 @@ namespace UnityMCP.UI
             }
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private int GetToolbarPopupIndex()
+        {
+            if (_currentMode == GenerateMode.CombinedPrefabFirst)
+                return (int)GenerateMode.Combined;
+            if (_currentMode == GenerateMode.ProjectQuery)
+                return 5;
+            return (int)_currentMode;
+        }
+
+        private void SetModeFromToolbarPopupIndex(int idx)
+        {
+            _currentMode = idx == 5 ? GenerateMode.ProjectQuery : (GenerateMode)idx;
         }
 
         private const string WorkspaceScopeHelpBody =
@@ -866,6 +891,7 @@ namespace UnityMCP.UI
                 GenerateMode.Prefab => "描述你需要的预制体，如：创建一个包含碰撞体的玩家预制体",
                 GenerateMode.Combined => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
                 GenerateMode.SceneOps => "描述在当前场景要做的事情，如：在根下建空物体 Door，加 BoxCollider；或把 Props/Crate 挂到选中物体下；或实例化 Assets/.../Enemy.prefab",
+                GenerateMode.ProjectQuery => "根据当前工程真实数据提问，如：项目里有哪些预制体、脚本大概有多少、用了哪些包",
                 _ => ""
             };
 
@@ -918,6 +944,19 @@ namespace UnityMCP.UI
                     EditorStyles.miniLabel, tw);
             else
                 DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel, tw);
+
+            // 联合先预制体再脚本：保存脚本后保留本气泡为「第 2 步完成」，不改成最终成功态
+            var combinedPrefabScriptSaved =
+                msg.Mode == GenerateMode.CombinedPrefabFirst && !string.IsNullOrEmpty(msg.SavedScriptPath);
+            if (combinedPrefabScriptSaved)
+            {
+                EditorGUILayout.Space(5);
+                DrawSelectableLabel($"已保存: {msg.SavedScriptPath}", EditorStyles.miniLabel, tw);
+                EditorGUILayout.Space(5);
+                if (GUILayout.Button("预览代码", GUILayout.Height(25)))
+                    PreviewWindow.ShowWindow($"{msg.ScriptName}.cs 预览", msg.GeneratedCode);
+                return;
+            }
             
             EditorGUILayout.Space(5);
             EditorGUILayout.BeginHorizontal();
@@ -1211,6 +1250,10 @@ namespace UnityMCP.UI
                     AddTextBubble("⏳ 正在生成场景操控列表，请稍候...");
                     GenerateSceneOpsAsync(context);
                     break;
+                case GenerateMode.ProjectQuery:
+                    AddTextBubble("⏳ 正在根据项目上下文回答，请稍候...");
+                    ProjectQueryAsync(context);
+                    break;
             }
             ScrollToBottom();
         }
@@ -1244,6 +1287,7 @@ namespace UnityMCP.UI
             GenerationRoute.Prefab => GenerateMode.Prefab,
             GenerationRoute.Both => combinedPrefabFirst ? GenerateMode.CombinedPrefabFirst : GenerateMode.Combined,
             GenerationRoute.SceneOps => GenerateMode.SceneOps,
+            GenerationRoute.ProjectQuery => GenerateMode.ProjectQuery,
             _ => GenerateMode.Code
         };
 
@@ -1254,6 +1298,7 @@ namespace UnityMCP.UI
             GenerateMode.Combined => "联合生成（代码 + 预制体）",
             GenerateMode.CombinedPrefabFirst => "联合生成（先预制体 + 脚本）",
             GenerateMode.SceneOps => "场景操控（unity-ops）",
+            GenerateMode.ProjectQuery => "项目查询（盘点预制体等）",
             _ => mode.ToString()
         };
 
@@ -1310,7 +1355,8 @@ namespace UnityMCP.UI
                 _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
 
                 var label = ModeDecisionLabel(resolvedMode);
-                var codeHint = resolvedMode != GenerateMode.Prefab && resolvedMode != GenerateMode.SceneOps
+                var codeHint = resolvedMode != GenerateMode.Prefab && resolvedMode != GenerateMode.SceneOps &&
+                               resolvedMode != GenerateMode.ProjectQuery
                     ? $"（代码类型：{PromptBuilder.CodeTypeLabels[(int)intent.CodeType]}）"
                     : "";
                 if (resolvedMode == GenerateMode.CombinedPrefabFirst)
@@ -1338,6 +1384,10 @@ namespace UnityMCP.UI
                     case GenerateMode.SceneOps:
                         AddTextBubble("⏳ 正在生成场景操控列表，请稍候...");
                         GenerateSceneOpsAsync(context);
+                        break;
+                    case GenerateMode.ProjectQuery:
+                        AddTextBubble("⏳ 正在根据项目上下文回答，请稍候...");
+                        ProjectQueryAsync(context);
                         break;
                     default:
                         context.ErrorMessage = $"内部错误：未知解析模式 {resolvedMode}";
@@ -1577,6 +1627,58 @@ namespace UnityMCP.UI
             }
         }
 
+        private async void ProjectQueryAsync(ChatMessage context)
+        {
+            if (_config == null)
+            {
+                context.ErrorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+                return;
+            }
+
+            try
+            {
+                var service = AIServiceFactory.Create(_config);
+                var projContext = ProjectContext.Collect();
+                var systemPrompt = PromptBuilder.BuildProjectQuerySystemPrompt(projContext);
+                var userPrompt = context.Content;
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange("项目查询", response, $"memoryTurns={memory?.Count ?? 0}");
+
+                if (!response.Success)
+                {
+                    context.ErrorMessage = response.Error ?? "AI 返回了未知错误";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                var text = ResponseParser.StripThinkBlocks(response.Content ?? "");
+                context.Type = MessageTypeEnum.Text;
+                context.Content = string.IsNullOrWhiteSpace(text) ? "（无正文）" : text.Trim();
+                context.GenerationTime = response.Duration;
+                context.TokensUsed = response.TokensUsed;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            catch (Exception ex)
+            {
+                AiExchangeDebugLog.AppendException("项目查询", ex);
+                context.ErrorMessage = $"项目查询时出错: {ex.Message}";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            finally
+            {
+                Repaint();
+            }
+        }
+
         private void ExecuteSceneOps(ChatMessage msg)
         {
             if (msg.SceneOpsEnvelope == null)
@@ -1701,6 +1803,37 @@ namespace UnityMCP.UI
 
         #region 操作按钮处理
 
+        /// <summary>用户是否明确希望把生成的预制体放进当前打开的场景（自然语言启发式）。</summary>
+        private static bool ContentRequestsScenePlacement(string? content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+                return false;
+            var c = content.ToLowerInvariant();
+            if (c.Contains("当前场景") || c.Contains("放到场景") || c.Contains("放进场景") || c.Contains("场景里") ||
+                c.Contains("场景根") || c.Contains("实例化到场景") || c.Contains("拖入场景") || c.Contains("在场景里") ||
+                c.Contains("hierarchy") || c.Contains("层级里"))
+                return true;
+            return c.Contains("into the scene") || c.Contains("in the scene");
+        }
+
+        private static void TryInstantiatePrefabInActiveScene(string assetPath)
+        {
+            var r = SceneEditorTools.InstantiatePrefab(assetPath, null);
+            if (!r.Success)
+            {
+                Debug.LogWarning($"[UnityMCP] 未能将预制体放入当前场景: {r.Error}");
+                return;
+            }
+
+            if (r.GameObject != null)
+            {
+                Selection.activeObject = r.GameObject;
+                EditorGUIUtility.PingObject(r.GameObject);
+            }
+
+            Debug.Log($"[UnityMCP] 已将预制体实例化到当前场景: {assetPath}");
+        }
+
         private void SaveScript(ChatMessage msg)
         {
             if (string.IsNullOrEmpty(msg.ScriptName))
@@ -1718,16 +1851,45 @@ namespace UnityMCP.UI
             var result = ScriptGenerator.SaveScript(msg.ScriptName, msg.GeneratedCode);
             if (result.Success)
             {
-                // 将原气泡改为成功展示
                 msg.SavedScriptPath = result.FilePath;
-                msg.Type = MessageTypeEnum.SuccessResult;
-                _isGenerating = false;
 
                 if (msg.Mode == GenerateMode.CombinedPrefabFirst && !string.IsNullOrEmpty(msg.SavedPrefabPath))
+                {
                     PrefabGenerator.ScheduleAttachScriptToPrefabAfterCompile(msg.SavedPrefabPath, msg.ScriptName);
-                
-                // 为了让用户注意到结果，我们可以新发一条最终结果气泡，原气泡可以直接变成提示或保留
-                // 这里我们选择把这个气泡的Type转换为Success，它会自动渲染成最终结果UI
+                    // 保留原「第 2 步完成」气泡（仍为 CodeGenerated），另起一条最终成功气泡
+                    var finalMsg = new ChatMessage
+                    {
+                        Role = ChatRole.Assistant,
+                        Type = MessageTypeEnum.SuccessResult,
+                        Mode = GenerateMode.CombinedPrefabFirst,
+                        Content = msg.Content,
+                        SavedScriptPath = result.FilePath,
+                        SavedPrefabPath = msg.SavedPrefabPath,
+                        PrefabWarnings = new List<string>(msg.PrefabWarnings),
+                        GenerationTime = msg.GenerationTime,
+                        TokensUsed = msg.TokensUsed,
+                        CodeGenerationTime = msg.CodeGenerationTime,
+                        CodeTokensUsed = msg.CodeTokensUsed,
+                        CombinedPrefabFirst = true
+                    };
+                    AddResultBubble(finalMsg);
+                    _isGenerating = false;
+
+                    var placePath = _pendingPrefabPathForScenePlace;
+                    if (!string.IsNullOrEmpty(placePath) &&
+                        string.Equals(placePath, msg.SavedPrefabPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        TryInstantiatePrefabInActiveScene(placePath);
+                        _pendingPrefabPathForScenePlace = null;
+                    }
+
+                    Repaint();
+                    ScrollToBottom();
+                    return;
+                }
+
+                msg.Type = MessageTypeEnum.SuccessResult;
+                _isGenerating = false;
                 Repaint();
                 ScrollToBottom();
             }
@@ -1757,6 +1919,9 @@ namespace UnityMCP.UI
                 {
                     _combinedPrefabGenTime = msg.GenerationTime;
                     _combinedPrefabTokens = msg.TokensUsed;
+                    _pendingPrefabPathForScenePlace = ContentRequestsScenePlacement(msg.Content)
+                        ? result.AssetPath
+                        : null;
                     AddTextBubble("⏳ 联合生成 (第2步): 正在生成代码...");
                     // 第二步必须用新实例：msg 已在历史中，不能再让 GenerateCodeAsync 就地改写同一引用
                     var codePhase = new ChatMessage
@@ -1766,7 +1931,8 @@ namespace UnityMCP.UI
                         Content = msg.Content,
                         CodeType = msg.CodeType,
                         CombinedPrefabFirst = true,
-                        SavedPrefabPath = msg.SavedPrefabPath
+                        SavedPrefabPath = msg.SavedPrefabPath,
+                        PrefabWarnings = new List<string>(msg.PrefabWarnings)
                     };
                     GenerateCodeAsync(codePhase);
                     Repaint();
@@ -1784,6 +1950,10 @@ namespace UnityMCP.UI
                 }
 
                 _isGenerating = false;
+
+                if (ContentRequestsScenePlacement(msg.Content))
+                    TryInstantiatePrefabInActiveScene(result.AssetPath);
+
                 Repaint();
                 ScrollToBottom();
             }

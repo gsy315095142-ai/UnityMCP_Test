@@ -146,7 +146,7 @@ namespace UnityMCP.AI
             if (route == null)
             {
                 return GenerationIntentResult.Fail(
-                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both / sceneOps。",
+                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both / sceneOps / projectQuery。",
                     jsonText);
             }
 
@@ -178,11 +178,14 @@ namespace UnityMCP.AI
                 "prefab" or "prefabrication" or "gameobject" => GenerationRoute.Prefab,
                 "both" or "combined" or "all" or "codeandprefab" or "prefabandcode" => GenerationRoute.Both,
                 "sceneops" or "sceneop" or "hierarchyedit" or "unitysceneops" => GenerationRoute.SceneOps,
+                "projectquery" or "projectinfo" or "query" or "info" or "answer" or "readonly" or "inventory" =>
+                    GenerationRoute.ProjectQuery,
                 // 常见中文返回值（本地模型）
                 "代码" or "脚本" or "csharp脚本" => GenerationRoute.Code,
                 "预制体" or "预设" => GenerationRoute.Prefab,
                 "联合" or "两者" or "都要" or "代码和预制体" or "脚本和预制体" => GenerationRoute.Both,
                 "场景操控" or "场景操作" or "编辑场景" or "hierarchy操作" => GenerationRoute.SceneOps,
+                "项目查询" or "项目盘点" or "检查项目" or "只读查询" => GenerationRoute.ProjectQuery,
                 _ => null
             };
         }
@@ -304,7 +307,7 @@ namespace UnityMCP.AI
         /// <summary>
         /// 移除 AI 思考过程（&lt;think&gt;...&lt;/think&gt; 块）
         /// </summary>
-        private static string StripThinkBlocks(string content)
+        public static string StripThinkBlocks(string content)
         {
             return ThinkBlockRegex.Replace(content, "").Trim();
         }

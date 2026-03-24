@@ -2,21 +2,40 @@
 
 using System;
 using System.Text;
+using UnityEditor;
 using UnityMCP.AI;
 
 namespace UnityMCP.UI
 {
     /// <summary>
     /// 记录 AI 请求/响应摘要（供主窗口侧栏排查空内容、解析失败等）。
-    /// 仅在编辑器主线程使用。
+    /// 仅在编辑器主线程使用。内容写入 SessionState，脚本编译等域重载后仍保留。
     /// </summary>
     public static class AiExchangeDebugLog
     {
+        private const string SessionKey = "UnityMCP.AiExchangeDebugLog.v1";
         private static readonly StringBuilder Buffer = new();
         private const int MaxTotalChars = 200_000;
         private const int MaxContentPreview = 16_000;
 
-        public static void Clear() => Buffer.Clear();
+        static AiExchangeDebugLog()
+        {
+            var s = SessionState.GetString(SessionKey, "");
+            if (s.Length > 0)
+                Buffer.Append(s);
+        }
+
+        public static void Clear()
+        {
+            Buffer.Clear();
+            SessionState.SetString(SessionKey, "");
+        }
+
+        private static void PersistSession()
+        {
+            TrimIfNeeded();
+            SessionState.SetString(SessionKey, Buffer.ToString());
+        }
 
         public static string GetText() => Buffer.Length == 0 ? "" : Buffer.ToString();
 
@@ -46,7 +65,7 @@ namespace UnityMCP.UI
             }
 
             Buffer.AppendLine("────────────────────────────────────────");
-            TrimIfNeeded();
+            PersistSession();
         }
 
         public static void AppendException(string phase, Exception ex)
@@ -55,7 +74,7 @@ namespace UnityMCP.UI
                 .Append(phase).Append(" — 异常:").AppendLine();
             Buffer.AppendLine(ex.ToString());
             Buffer.AppendLine("────────────────────────────────────────");
-            TrimIfNeeded();
+            PersistSession();
         }
 
         private static void TrimIfNeeded()
