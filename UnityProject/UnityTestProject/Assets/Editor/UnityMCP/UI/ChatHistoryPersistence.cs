@@ -48,6 +48,7 @@ namespace UnityMCP.UI
             public int sceneOpsExecuted;
             public int sceneOpsSkipped;
             public int compileWaitTicks;
+            public string assetDeletePathsJoined = "";
         }
 
         public static void Save(IReadOnlyList<ChatMessage> history)
@@ -130,7 +131,8 @@ namespace UnityMCP.UI
                 codeTokensUsed = m.CodeTokensUsed,
                 sceneOpsExecuted = m.SceneOpsExecutedStepCount,
                 sceneOpsSkipped = m.SceneOpsSkippedStepCount,
-                compileWaitTicks = m.CompileWaitTicks
+                compileWaitTicks = m.CompileWaitTicks,
+                assetDeletePathsJoined = string.Join("\n", m.AssetDeletePaths ?? new List<string>())
             };
         }
 
@@ -160,6 +162,9 @@ namespace UnityMCP.UI
                 CompileWaitTicks = p.compileWaitTicks
             };
 
+            if (!string.IsNullOrEmpty(p.assetDeletePathsJoined))
+                m.AssetDeletePaths = p.assetDeletePathsJoined.Split('\n').Where(s => !string.IsNullOrEmpty(s)).ToList();
+
             if (!string.IsNullOrEmpty(p.prefabWarningsJoined))
                 m.PrefabWarnings = p.prefabWarningsJoined.Split('\n').Where(s => !string.IsNullOrEmpty(s)).ToList();
 
@@ -180,6 +185,13 @@ namespace UnityMCP.UI
                 var sr = SceneOpsParser.Parse(m.RawJson);
                 if (sr.Success && sr.Envelope != null)
                     m.SceneOpsEnvelope = sr.Envelope;
+            }
+
+            if (m.Type == MessageTypeEnum.AssetOpsReady && m.AssetOpsEnvelope == null && !string.IsNullOrEmpty(m.RawJson))
+            {
+                var ar = AssetOpsParser.Parse(m.RawJson);
+                if (ar.Success && ar.Envelope != null)
+                    m.AssetOpsEnvelope = ar.Envelope;
             }
 
             return m;

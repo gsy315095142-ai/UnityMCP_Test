@@ -77,6 +77,15 @@ namespace UnityMCP.Tools
                 "addcomponent" => ExecAddComponent(op),
                 "settransform" => ExecSetTransform(op),
                 "instantiateprefab" => ExecInstantiatePrefab(op, scene),
+                "destroy" => ExecDestroy(op),
+                "duplicate" => ExecDuplicate(op),
+                "setactive" => ExecSetActive(op),
+                "setlayer" => ExecSetLayer(op),
+                "settag" => ExecSetTag(op),
+                "openscene" => ExecOpenScene(op),
+                "setcomponentproperty" => ExecSetComponentProperty(op),
+                "setrecttransform" => ExecSetRectTransform(op),
+                "setuitext" => ExecSetUiText(op),
                 _ => SceneOperationResult.Fail($"未知操作: {op.op}")
             };
         }
@@ -162,6 +171,98 @@ namespace UnityMCP.Tools
                 pos,
                 euler,
                 scale);
+        }
+
+        private static SceneOperationResult ExecDestroy(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("destroy 需要 path");
+            return SceneEditorTools.DestroyGameObjectByHierarchyPath(op.path.Trim());
+        }
+
+        private static SceneOperationResult ExecDuplicate(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("duplicate 需要 path");
+            var name = string.IsNullOrWhiteSpace(op.duplicateNewName) ? null : op.duplicateNewName.Trim();
+            return SceneEditorTools.DuplicateGameObjectByHierarchyPath(op.path.Trim(), name);
+        }
+
+        private static SceneOperationResult ExecSetActive(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setActive 需要 path");
+            return SceneEditorTools.SetActiveByHierarchyPath(op.path.Trim(), op.active);
+        }
+
+        private static SceneOperationResult ExecSetLayer(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setLayer 需要 path");
+            return SceneEditorTools.SetLayerByHierarchyPath(
+                op.path.Trim(),
+                op.layerIndex,
+                string.IsNullOrWhiteSpace(op.layerName) ? null : op.layerName.Trim());
+        }
+
+        private static SceneOperationResult ExecSetTag(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setTag 需要 path");
+            return SceneEditorTools.SetTagByHierarchyPath(op.path.Trim(), op.gameObjectTag ?? "");
+        }
+
+        private static SceneOperationResult ExecOpenScene(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.sceneAssetPath))
+                return SceneOperationResult.Fail("openScene 需要 sceneAssetPath");
+            return SceneEditorTools.OpenSceneByAssetPath(op.sceneAssetPath.Trim(), op.openSceneAdditive);
+        }
+
+        private static SceneOperationResult ExecSetComponentProperty(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setComponentProperty 需要 path");
+            return SceneEditorTools.SetComponentPropertyByHierarchyPath(
+                op.path.Trim(),
+                op.typeName ?? "",
+                op.serializedPropertyPath ?? "",
+                op.propertyValue ?? "");
+        }
+
+        private static SceneOperationResult ExecSetRectTransform(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setRectTransform 需要 path");
+
+            var amin = SceneOpsVectorParser.TryParseVector2(op.anchorMin);
+            var amax = SceneOpsVectorParser.TryParseVector2(op.anchorMax);
+            var apos = SceneOpsVectorParser.TryParseVector2(op.anchoredPosition);
+            var sd = SceneOpsVectorParser.TryParseVector2(op.sizeDelta);
+            var pv = SceneOpsVectorParser.TryParseVector2(op.pivot);
+            var omin = SceneOpsVectorParser.TryParseVector2(op.offsetMin);
+            var omax = SceneOpsVectorParser.TryParseVector2(op.offsetMax);
+
+            if (amin == null && amax == null && apos == null && sd == null && pv == null && omin == null && omax == null)
+                return SceneOperationResult.Fail(
+                    "setRectTransform 至少需要 anchorMin / anchorMax / anchoredPosition / sizeDelta / pivot / offsetMin / offsetMax 之一");
+
+            return SceneEditorTools.SetRectTransformByHierarchyPath(
+                op.path.Trim(),
+                amin,
+                amax,
+                apos,
+                sd,
+                pv,
+                omin,
+                omax);
+        }
+
+        private static SceneOperationResult ExecSetUiText(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setUiText 需要 path");
+            return SceneEditorTools.SetUiTextByHierarchyPath(op.path.Trim(), op.uiText ?? "");
         }
     }
 }

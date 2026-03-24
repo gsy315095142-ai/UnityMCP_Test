@@ -57,8 +57,24 @@ namespace UnityMCP.Tools
                 "settransform" => CheckPathOnly(op.path, "setTransform", scene, root, applySubtreeCap, out summary),
                 "instantiateprefab" => CheckInstantiatePrefab(op, scene, root, applySubtreeCap, prefabPrefix, hasPrefabPrefix,
                     out summary),
+                "openscene" => CheckOpenScene(out summary),
+                "destroy" => CheckPathOnly(op.path, "destroy", scene, root, applySubtreeCap, out summary),
+                "duplicate" => CheckPathOnly(op.path, "duplicate", scene, root, applySubtreeCap, out summary),
+                "setactive" => CheckPathOnly(op.path, "setActive", scene, root, applySubtreeCap, out summary),
+                "setlayer" => CheckPathOnly(op.path, "setLayer", scene, root, applySubtreeCap, out summary),
+                "settag" => CheckPathOnly(op.path, "setTag", scene, root, applySubtreeCap, out summary),
+                "setcomponentproperty" => CheckPathOnly(op.path, "setComponentProperty", scene, root, applySubtreeCap,
+                    out summary),
+                "setrecttransform" => CheckPathOnly(op.path, "setRectTransform", scene, root, applySubtreeCap, out summary),
+                "setuitext" => CheckPathOnly(op.path, "setUiText", scene, root, applySubtreeCap, out summary),
                 _ => FallbackUnknown(op, out summary)
             };
+        }
+
+        private static bool CheckOpenScene(out string summary)
+        {
+            summary = "";
+            return true;
         }
 
         private static bool FallbackUnknown(SceneOperationDto op, out string summary)
@@ -322,6 +338,15 @@ namespace UnityMCP.Tools
                 "addcomponent" => $"addComponent — {op.path} 添加 {op.typeName}",
                 "settransform" => $"setTransform — {op.path}",
                 "instantiateprefab" => $"instantiatePrefab — {op.prefabAssetPath} → 父: {(string.IsNullOrEmpty(op.parentPath) ? "（场景根）" : op.parentPath)}",
+                "destroy" => $"destroy — {op.path}",
+                "duplicate" => $"duplicate — {op.path}",
+                "setactive" => $"setActive — {op.path} = {op.active}",
+                "setlayer" => $"setLayer — {op.path}",
+                "settag" => $"setTag — {op.path} → {op.gameObjectTag}",
+                "openscene" => $"openScene — {op.sceneAssetPath} (additive={op.openSceneAdditive})",
+                "setcomponentproperty" => $"setComponentProperty — {op.path} :: {op.typeName} . {op.serializedPropertyPath}",
+                "setrecttransform" => $"setRectTransform — {op.path}",
+                "setuitext" => $"setUiText — {op.path}",
                 _ => $"op={op.op}"
             };
         }

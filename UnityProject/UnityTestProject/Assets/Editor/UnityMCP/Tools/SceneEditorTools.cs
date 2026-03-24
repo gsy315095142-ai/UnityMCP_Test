@@ -1,9 +1,13 @@
 #nullable enable
 
 using System;
+using System.Globalization;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 using UnityMCP.Core;
 using UnityMCP.Generators;
 
@@ -255,6 +259,337 @@ namespace UnityMCP.Tools
             }
 
             return false;
+        }
+
+        public static SceneOperationResult DestroyGameObjectByHierarchyPath(string hierarchyPath)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+            Undo.DestroyObjectImmediate(go);
+            return SceneOperationResult.Ok(go);
+        }
+
+        public static SceneOperationResult DuplicateGameObjectByHierarchyPath(string hierarchyPath, string? newName)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+
+            Undo.IncrementCurrentGroup();
+            var group = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Duplicate GameObject");
+
+            try
+            {
+                var clone = UnityEngine.Object.Instantiate(go, go.transform.parent);
+                Undo.RegisterCreatedObjectUndo(clone, "Duplicate");
+                clone.transform.SetSiblingIndex(go.transform.GetSiblingIndex() + 1);
+                if (!string.IsNullOrWhiteSpace(newName))
+                    clone.name = newName.Trim();
+                else
+                    clone.name = go.name + " (1)";
+
+                Undo.CollapseUndoOperations(group);
+                return SceneOperationResult.Ok(clone);
+            }
+            catch (Exception ex)
+            {
+                Undo.RevertAllDownToGroup(group);
+                return SceneOperationResult.Fail($"复制失败: {ex.Message}");
+            }
+        }
+
+        public static SceneOperationResult SetActiveByHierarchyPath(string hierarchyPath, bool active)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+            Undo.RecordObject(go, "SetActive");
+            go.SetActive(active);
+            return SceneOperationResult.Ok(go);
+        }
+
+        public static SceneOperationResult SetLayerByHierarchyPath(string hierarchyPath, int layerIndex, string? layerName)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+
+            int layer;
+            if (layerIndex >= 0 && layerIndex < 32)
+                layer = layerIndex;
+            else if (!string.IsNullOrWhiteSpace(layerName))
+            {
+                layer = LayerMask.NameToLayer(layerName.Trim());
+                if (layer < 0)
+                    return SceneOperationResult.Fail($"未知 Layer 名称: {layerName}");
+            }
+            else
+                return SceneOperationResult.Fail("setLayer 需要 layerIndex（0–31）或 layerName。");
+
+            Undo.RecordObject(go, "Set Layer");
+            go.layer = layer;
+            return SceneOperationResult.Ok(go);
+        }
+
+        public static SceneOperationResult SetTagByHierarchyPath(string hierarchyPath, string tagName)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+            if (string.IsNullOrWhiteSpace(tagName))
+                return SceneOperationResult.Fail("gameObjectTag 为空。");
+
+            try
+            {
+                Undo.RecordObject(go, "Set Tag");
+                go.tag = tagName.Trim();
+                return SceneOperationResult.Ok(go);
+            }
+            catch (Exception ex)
+            {
+                return SceneOperationResult.Fail($"设置 Tag 失败（请确认 Tag 已在 Project Settings 中定义）: {ex.Message}");
+            }
+        }
+
+        public static SceneOperationResult OpenSceneByAssetPath(string sceneAssetPath, bool additive)
+        {
+            if (!AssetPathSecurity.TryValidateGenericAssetPath(sceneAssetPath, out var path, out var err))
+                return SceneOperationResult.Fail(err ?? "场景路径无效");
+            if (!path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
+                return SceneOperationResult.Fail("sceneAssetPath 须为 Assets 下 .unity 场景资源。");
+
+            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path) == null)
+                return SceneOperationResult.Fail($"找不到场景资源: {path}");
+
+            try
+            {
+                EditorSceneManager.OpenScene(
+                    path,
+                    additive ? OpenSceneMode.Additive : OpenSceneMode.Single);
+                return SceneOperationResult.Ok();
+            }
+            catch (Exception ex)
+            {
+                return SceneOperationResult.Fail($"打开场景失败: {ex.Message}");
+            }
+        }
+
+        public static SceneOperationResult SetComponentPropertyByHierarchyPath(
+            string hierarchyPath,
+            string componentTypeName,
+            string serializedPropertyPath,
+            string propertyValue)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+            if (string.IsNullOrWhiteSpace(componentTypeName))
+                return SceneOperationResult.Fail("setComponentProperty 需要 typeName（组件类型）。");
+            if (string.IsNullOrWhiteSpace(serializedPropertyPath))
+                return SceneOperationResult.Fail("setComponentProperty 需要 serializedPropertyPath。");
+
+            var type = ComponentConfigurator.ResolveComponentTypeForTools(componentTypeName);
+            if (type == null || !typeof(Component).IsAssignableFrom(type))
+                return SceneOperationResult.Fail($"无法解析组件类型: {componentTypeName}");
+
+            var comp = go.GetComponent(type);
+            if (comp == null)
+                return SceneOperationResult.Fail($"物体上未找到组件: {type.Name}");
+
+            try
+            {
+                using var so = new SerializedObject(comp);
+                var prop = so.FindProperty(serializedPropertyPath.Trim());
+                if (prop == null)
+                    return SceneOperationResult.Fail($"找不到 SerializedProperty: {serializedPropertyPath}");
+
+                var assign = TryAssignSerializedProperty(prop, propertyValue ?? "");
+                if (!assign.Success)
+                    return SceneOperationResult.Fail(assign.Error ?? "属性赋值失败");
+
+                so.ApplyModifiedProperties();
+                return SceneOperationResult.Ok(go);
+            }
+            catch (Exception ex)
+            {
+                return SceneOperationResult.Fail($"设置组件属性失败: {ex.Message}");
+            }
+        }
+
+        public static SceneOperationResult SetRectTransformByHierarchyPath(
+            string hierarchyPath,
+            Vector2? anchorMin,
+            Vector2? anchorMax,
+            Vector2? anchoredPosition,
+            Vector2? sizeDelta,
+            Vector2? pivot,
+            Vector2? offsetMin,
+            Vector2? offsetMax)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+
+            var rt = go.GetComponent<RectTransform>();
+            if (rt == null)
+                return SceneOperationResult.Fail($"物体没有 RectTransform: \"{hierarchyPath}\"");
+
+            Undo.RecordObject(rt, "Set RectTransform");
+            if (anchorMin.HasValue) rt.anchorMin = anchorMin.Value;
+            if (anchorMax.HasValue) rt.anchorMax = anchorMax.Value;
+            if (anchoredPosition.HasValue) rt.anchoredPosition = anchoredPosition.Value;
+            if (sizeDelta.HasValue) rt.sizeDelta = sizeDelta.Value;
+            if (pivot.HasValue) rt.pivot = pivot.Value;
+            if (offsetMin.HasValue) rt.offsetMin = offsetMin.Value;
+            if (offsetMax.HasValue) rt.offsetMax = offsetMax.Value;
+
+            return SceneOperationResult.Ok(go);
+        }
+
+        public static SceneOperationResult SetUiTextByHierarchyPath(string hierarchyPath, string text)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+
+            var uiText = go.GetComponent<Text>();
+            if (uiText != null)
+            {
+                Undo.RecordObject(uiText, "Set UI Text");
+                uiText.text = text ?? "";
+                return SceneOperationResult.Ok(go);
+            }
+
+            var tmpType = Type.GetType("TMPro.TMP_Text, Unity.TextMeshPro")
+                          ?? Type.GetType("TMPro.TextMeshProUGUI, Unity.TextMeshPro");
+            if (tmpType != null)
+            {
+                var comp = go.GetComponent(tmpType);
+                if (comp != null)
+                {
+                    var p = tmpType.GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
+                    if (p != null && p.CanWrite)
+                    {
+                        Undo.RecordObject(comp as UnityEngine.Object, "Set TMP Text");
+                        p.SetValue(comp, text ?? "");
+                        return SceneOperationResult.Ok(go);
+                    }
+                }
+            }
+
+            return SceneOperationResult.Fail("物体上未找到 UnityEngine.UI.Text 或 TMPro.TMP_Text/TextMeshProUGUI。");
+        }
+
+        private static (bool Success, string? Error) TryAssignSerializedProperty(SerializedProperty prop, string raw)
+        {
+            var v = raw.Trim();
+            try
+            {
+                switch (prop.propertyType)
+                {
+                    case SerializedPropertyType.Boolean:
+                        if (string.IsNullOrEmpty(v))
+                            return (false, "propertyValue 为空。");
+                        prop.boolValue = v.Equals("true", StringComparison.OrdinalIgnoreCase) || v == "1";
+                        return (true, null);
+                    case SerializedPropertyType.Integer:
+                    case SerializedPropertyType.LayerMask:
+                        if (!int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i))
+                            return (false, $"无法解析为整数: {v}");
+                        prop.intValue = i;
+                        return (true, null);
+                    case SerializedPropertyType.Float:
+                        if (!float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var f))
+                            return (false, $"无法解析为浮点数: {v}");
+                        prop.floatValue = f;
+                        return (true, null);
+                    case SerializedPropertyType.String:
+                        prop.stringValue = v;
+                        return (true, null);
+                    case SerializedPropertyType.Enum:
+                        if (string.IsNullOrEmpty(v))
+                            return (false, "propertyValue 为空。");
+                        if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ei))
+                        {
+                            prop.enumValueIndex = ei;
+                            return (true, null);
+                        }
+
+                        var names = prop.enumNames;
+                        for (var n = 0; n < names.Length; n++)
+                        {
+                            if (string.Equals(names[n], v, StringComparison.OrdinalIgnoreCase))
+                            {
+                                prop.enumValueIndex = n;
+                                return (true, null);
+                            }
+                        }
+
+                        return (false, $"枚举中无名称: {v}");
+                    case SerializedPropertyType.Color:
+                        var c = ParseColor(v);
+                        if (c == null) return (false, $"无法解析颜色: {v}");
+                        prop.colorValue = c.Value;
+                        return (true, null);
+                    case SerializedPropertyType.Vector2:
+                        var v2 = SceneOpsVectorParser.TryParseVector2(v);
+                        if (v2 == null) return (false, $"无法解析 Vector2: {v}");
+                        prop.vector2Value = v2.Value;
+                        return (true, null);
+                    case SerializedPropertyType.Vector3:
+                        var v3 = SceneOpsVectorParser.TryParseVector3(v);
+                        if (v3 == null) return (false, $"无法解析 Vector3: {v}");
+                        prop.vector3Value = v3.Value;
+                        return (true, null);
+                    case SerializedPropertyType.Vector4:
+                        var parts = v.Split(',');
+                        if (parts.Length < 4)
+                            return (false, $"Vector4 需要 4 个分量: {v}");
+                        if (!float.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var x) ||
+                            !float.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var y) ||
+                            !float.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var z) ||
+                            !float.TryParse(parts[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var w))
+                            return (false, $"无法解析 Vector4: {v}");
+                        prop.vector4Value = new Vector4(x, y, z, w);
+                        return (true, null);
+                    case SerializedPropertyType.ObjectReference:
+                        if (string.IsNullOrWhiteSpace(v) || v.Equals("null", StringComparison.OrdinalIgnoreCase))
+                        {
+                            prop.objectReferenceValue = null;
+                            return (true, null);
+                        }
+
+                        if (!AssetPathSecurity.TryValidateGenericAssetPath(v, out var ap, out _))
+                            return (false, $"ObjectReference 须为 Assets 路径或 null: {v}");
+                        prop.objectReferenceValue = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(ap);
+                        return (true, null);
+                    default:
+                        return (false, $"暂不支持的属性类型: {prop.propertyType}");
+                }
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
+
+        private static Color? ParseColor(string raw)
+        {
+            var p = raw.Split(',');
+            if (p.Length >= 3 &&
+                float.TryParse(p[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var r) &&
+                float.TryParse(p[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var g) &&
+                float.TryParse(p[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var b))
+            {
+                var a = 1f;
+                if (p.Length >= 4)
+                    float.TryParse(p[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out a);
+                return new Color(r, g, b, a);
+            }
+
+            return null;
         }
 
     }

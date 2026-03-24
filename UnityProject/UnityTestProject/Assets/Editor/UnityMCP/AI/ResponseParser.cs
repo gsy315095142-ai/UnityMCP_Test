@@ -146,7 +146,7 @@ namespace UnityMCP.AI
             if (route == null)
             {
                 return GenerationIntentResult.Fail(
-                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both / sceneOps / projectQuery。",
+                    $"无法识别的 generationTarget: “{parsed.generationTarget ?? "(空)"}”，应为 code / prefab / both / sceneOps / projectQuery / assetDelete / assetOps。",
                     jsonText);
             }
 
@@ -180,12 +180,17 @@ namespace UnityMCP.AI
                 "sceneops" or "sceneop" or "hierarchyedit" or "unitysceneops" => GenerationRoute.SceneOps,
                 "projectquery" or "projectinfo" or "query" or "info" or "answer" or "readonly" or "inventory" =>
                     GenerationRoute.ProjectQuery,
+                "assetdelete" or "deleteprefabs" or "deleteassets" or "removeprefabs" or "removeassets" =>
+                    GenerationRoute.AssetDelete,
+                "assetops" or "assetoperations" or "projectassets" or "organizeassets" => GenerationRoute.AssetOps,
                 // 常见中文返回值（本地模型）
                 "代码" or "脚本" or "csharp脚本" => GenerationRoute.Code,
                 "预制体" or "预设" => GenerationRoute.Prefab,
                 "联合" or "两者" or "都要" or "代码和预制体" or "脚本和预制体" => GenerationRoute.Both,
                 "场景操控" or "场景操作" or "编辑场景" or "hierarchy操作" => GenerationRoute.SceneOps,
                 "项目查询" or "项目盘点" or "检查项目" or "只读查询" => GenerationRoute.ProjectQuery,
+                "删除预制体" or "删除资源" or "移除预制体" or "删掉预制体" => GenerationRoute.AssetDelete,
+                "整理资源" or "移动资源" or "复制资源" or "重命名资源" or "新建文件夹" => GenerationRoute.AssetOps,
                 _ => null
             };
         }
@@ -411,7 +416,9 @@ namespace UnityMCP.AI
                 return t;
 
             return TryExtractBalancedJsonContainingKey(stripped, "unityOpsVersion")
-                   ?? TryExtractBalancedJsonContainingKey(stripped, "operations");
+                   ?? TryExtractBalancedJsonContainingKey(stripped, "assetOpsVersion")
+                   ?? TryExtractBalancedJsonContainingKey(stripped, "operations")
+                   ?? TryExtractBalancedJsonContainingKey(stripped, "assetPaths");
         }
 
         private static string? TryExtractBalancedJsonContainingKey(string content, string key)

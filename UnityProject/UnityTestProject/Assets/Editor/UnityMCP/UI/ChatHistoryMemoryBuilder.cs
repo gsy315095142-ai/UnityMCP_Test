@@ -110,6 +110,10 @@ namespace UnityMCP.UI
                     return $"[预制体] 已生成描述，预制体名: {m.PrefabName}。";
                 case MessageTypeEnum.SceneOpsReady:
                     return "[场景操控] 已生成 unity-ops 步骤: " + SummarizeSceneOpsEnvelope(m.SceneOpsEnvelope);
+                case MessageTypeEnum.AssetDeleteReady:
+                    return "[删除资源] 待删除资源 " + (m.AssetDeletePaths?.Count ?? 0) + " 个（待确认）。";
+                case MessageTypeEnum.AssetOpsReady:
+                    return "[资源整理] 已生成 asset-ops 步骤: " + SummarizeAssetOpsEnvelope(m.AssetOpsEnvelope);
                 case MessageTypeEnum.SuccessResult:
                 {
                     var sb = new StringBuilder("[完成]");
@@ -119,6 +123,8 @@ namespace UnityMCP.UI
                         sb.Append(" 预制体: ").Append(m.SavedPrefabPath);
                     if (m.Mode == GenerateMode.SceneOps)
                         sb.Append($" 场景操控已执行 {m.SceneOpsExecutedStepCount} 步。");
+                    if (m.Mode == GenerateMode.AssetOps)
+                        sb.Append($" 资源整理已执行 {m.AssetOpsExecutedStepCount} 步。");
                     return sb.ToString();
                 }
                 case MessageTypeEnum.Error:
@@ -129,6 +135,15 @@ namespace UnityMCP.UI
         }
 
         private static string SummarizeSceneOpsEnvelope(SceneOpsEnvelopeDto? env)
+        {
+            if (env?.operations == null || env.operations.Length == 0)
+                return "（无步骤）";
+            var parts = env.operations
+                .Select(o => string.IsNullOrWhiteSpace(o.op) ? "?" : o.op.Trim());
+            return string.Join(" → ", parts);
+        }
+
+        private static string SummarizeAssetOpsEnvelope(AssetOpsEnvelopeDto? env)
         {
             if (env?.operations == null || env.operations.Length == 0)
                 return "（无步骤）";

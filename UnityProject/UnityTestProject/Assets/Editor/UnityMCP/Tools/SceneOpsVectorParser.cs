@@ -28,5 +28,22 @@ namespace UnityMCP.Tools
 
             return new Vector3(x, y, z);
         }
+
+        public static Vector2? TryParseVector2(string? csv)
+        {
+            if (string.IsNullOrWhiteSpace(csv))
+                return null;
+
+            var parts = csv.Trim().Split(new[] { ',' }, System.StringSplitOptions.None);
+            if (parts.Length < 2)
+                return null;
+
+            if (!float.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var x))
+                return null;
+            if (!float.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+                return null;
+
+            return new Vector2(x, y);
+        }
     }
 }

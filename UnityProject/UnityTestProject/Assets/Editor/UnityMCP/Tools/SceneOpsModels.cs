@@ -24,7 +24,8 @@ namespace UnityMCP.Tools
     public class SceneOperationDto
     {
         /// <summary>
-        /// 操作类型：createEmpty | setParent | addComponent | setTransform | instantiatePrefab（大小写不敏感，允许下划线写法）。
+        /// 操作类型：createEmpty | setParent | addComponent | setTransform | instantiatePrefab | destroy | duplicate |
+        /// setActive | setLayer | setTag | openScene | setComponentProperty | setRectTransform | setUiText（大小写不敏感，允许下划线）。
         /// </summary>
         public string op = "";
 
@@ -55,6 +56,51 @@ namespace UnityMCP.Tools
         public string localEulerAngles = "";
 
         public string localScale = "";
+
+        /// <summary>openScene：Assets 下 .unity 场景资源路径。</summary>
+        public string sceneAssetPath = "";
+
+        /// <summary>openScene：是否叠加打开（不卸载当前场景）。</summary>
+        public bool openSceneAdditive;
+
+        /// <summary>setActive：是否激活 GameObject。</summary>
+        public bool active = true;
+
+        /// <summary>setLayer：层索引（0–31）；与 layerName 二选一时可优先用索引。</summary>
+        public int layerIndex = -1;
+
+        /// <summary>setLayer：层名（与 layerIndex 二选一）。</summary>
+        public string layerName = "";
+
+        /// <summary>setTag：Tag 名称（须在 TagManager 中已存在）。</summary>
+        public string gameObjectTag = "";
+
+        /// <summary>duplicate：新物体名称（可省略，默认原名 + 后缀）。</summary>
+        public string duplicateNewName = "";
+
+        /// <summary>setComponentProperty：SerializedProperty 路径（如 m_Color、fontSize）。</summary>
+        public string serializedPropertyPath = "";
+
+        /// <summary>setComponentProperty：属性值字符串（按类型解析）。</summary>
+        public string propertyValue = "";
+
+        /// <summary>setRectTransform：锚点 min，格式 ""x,y""。</summary>
+        public string anchorMin = "";
+
+        public string anchorMax = "";
+
+        public string anchoredPosition = "";
+
+        public string sizeDelta = "";
+
+        public string pivot = "";
+
+        public string offsetMin = "";
+
+        public string offsetMax = "";
+
+        /// <summary>setUiText：目标物体上 Unity UI Text 或 TMP 的显示文本。</summary>
+        public string uiText = "";
     }
 
     /// <summary>解析 <see cref="SceneOpsEnvelopeDto"/> 的结果</summary>

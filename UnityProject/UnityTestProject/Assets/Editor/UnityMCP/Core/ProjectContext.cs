@@ -23,6 +23,9 @@ namespace UnityMCP.Core
         public List<string> ExistingScripts { get; set; } = new();
         /// <summary>工程中 Assets 下所有 .prefab 资源路径（已排序），供「项目查询」与 Prompt 使用。</summary>
         public List<string> PrefabAssetPaths { get; set; } = new();
+        public List<string> MaterialAssetPaths { get; set; } = new();
+        public List<string> SceneAssetPaths { get; set; } = new();
+        public List<string> Texture2DAssetPaths { get; set; } = new();
         public List<string> InstalledPackages { get; set; } = new();
 
         private const string DEFAULT_NAMESPACE = "UnityMCP.Generated";
@@ -43,6 +46,9 @@ namespace UnityMCP.Core
                 PrefabOutputPath = DEFAULT_PREFAB_PATH,
                 ExistingScripts = CollectExistingScripts(),
                 PrefabAssetPaths = CollectPrefabAssetPaths(),
+                MaterialAssetPaths = CollectAssetPathsByFilter("t:Material"),
+                SceneAssetPaths = CollectAssetPathsByFilter("t:Scene"),
+                Texture2DAssetPaths = CollectAssetPathsByFilter("t:Texture2D"),
                 InstalledPackages = CollectInstalledPackages()
             };
 
@@ -57,7 +63,7 @@ namespace UnityMCP.Core
             return $@"## 项目摘要（场景操控）
 - Unity {UnityVersion}，渲染管线: {RenderPipeline}
 - 默认命名空间: {DefaultNamespace}；脚本目录: {ScriptOutputPath}；预制体目录: {PrefabOutputPath}
-- 工程中 .prefab 资源共 {PrefabAssetPaths.Count} 个；脚本类名约 {ExistingScripts.Count} 个（操控层级时若需自定义组件，勿与现有类名冲突）";
+- 工程中 .prefab 共 {PrefabAssetPaths.Count} 个；Material {MaterialAssetPaths.Count} 个；场景资产 {SceneAssetPaths.Count} 个；Texture2D {Texture2DAssetPaths.Count} 个；脚本类名约 {ExistingScripts.Count} 个（自定义组件勿与现有类名冲突）";
         }
 
         /// <summary>
@@ -74,6 +80,7 @@ namespace UnityMCP.Core
                 : "  （仅默认包）";
 
             const int maxPrefabsInPrompt = 200;
+            const int maxOtherAssetsInPrompt = 120;
             var prefabTotal = PrefabAssetPaths.Count;
             var prefabList = prefabTotal > 0
                 ? string.Join("\n", PrefabAssetPaths.Take(maxPrefabsInPrompt).Select(p => $"  - {p}"))
@@ -81,6 +88,20 @@ namespace UnityMCP.Core
                       ? $"\n  … 共 {prefabTotal} 个预制体，此处仅列出前 {maxPrefabsInPrompt} 条路径"
                       : "")
                 : "  （工程中暂无 .prefab 资源）";
+
+            string BuildTruncatedList(List<string> paths, int maxLines, string emptyLabel)
+            {
+                var total = paths.Count;
+                if (total == 0) return $"  （{emptyLabel}）";
+                var lines = string.Join("\n", paths.Take(maxLines).Select(p => $"  - {p}"));
+                if (total > maxLines)
+                    lines += $"\n  … 共 {total} 条，此处仅列出前 {maxLines} 条";
+                return lines;
+            }
+
+            var matList = BuildTruncatedList(MaterialAssetPaths, maxOtherAssetsInPrompt, "暂无 Material");
+            var sceneList = BuildTruncatedList(SceneAssetPaths, maxOtherAssetsInPrompt, "暂无场景资产");
+            var texList = BuildTruncatedList(Texture2DAssetPaths, maxOtherAssetsInPrompt, "暂无 Texture2D");
 
             return $@"## 项目环境
 - Unity 版本: {UnityVersion}
@@ -100,6 +121,15 @@ namespace UnityMCP.Core
 ## 工程中的预制体资源（Assets 下 .prefab，路径真实可查）
 共 {prefabTotal} 个：
 {prefabList}
+
+## 工程中的材质（t:Material，共 {MaterialAssetPaths.Count} 个）
+{matList}
+
+## 工程中的场景资产（.unity，共 {SceneAssetPaths.Count} 个）
+{sceneList}
+
+## 工程中的 Texture2D 贴图（共 {Texture2DAssetPaths.Count} 个）
+{texList}
 
 ## 已安装的包
 {packageList}";
@@ -142,6 +172,21 @@ namespace UnityMCP.Core
         {
             var paths = new List<string>();
             var guids = AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" });
+            foreach (var guid in guids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!string.IsNullOrEmpty(path))
+                    paths.Add(path);
+            }
+
+            paths.Sort(StringComparer.OrdinalIgnoreCase);
+            return paths;
+        }
+
+        private static List<string> CollectAssetPathsByFilter(string typeFilter)
+        {
+            var paths = new List<string>();
+            var guids = AssetDatabase.FindAssets(typeFilter, new[] { "Assets" });
             foreach (var guid in guids)
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);

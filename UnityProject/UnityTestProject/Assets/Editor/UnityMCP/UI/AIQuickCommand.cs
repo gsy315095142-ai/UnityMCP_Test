@@ -33,7 +33,9 @@ namespace UnityMCP.UI
         PrefabGenerated,    // 预制体生成完毕，等待用户保存
         SuccessResult,      // 最终成功结果展示
         Error,               // 错误展示
-        SceneOpsReady       // 场景操控 JSON 已解析，等待用户执行
+        SceneOpsReady,       // 场景操控 JSON 已解析，等待用户执行
+        AssetDeleteReady,    // 待删除资源路径已解析，等待用户确认
+        AssetOpsReady        // asset-ops JSON 已解析，等待用户执行
     }
 
     /// <summary>
@@ -51,7 +53,11 @@ namespace UnityMCP.UI
         /// <summary>联合生成：先预制体再脚本（仅 AI 判断可进入，避免先编译丢会话）</summary>
         CombinedPrefabFirst = 5,
         /// <summary>基于项目扫描结果回答（盘点预制体、已有资源等），不生成新资源</summary>
-        ProjectQuery = 6
+        ProjectQuery = 6,
+        /// <summary>从 Project 删除资源（AI 输出路径 JSON，确认后执行）</summary>
+        AssetDelete = 7,
+        /// <summary>移动/复制/建文件夹等（asset-ops JSON）</summary>
+        AssetOps = 8
     }
 
     /// <summary>
@@ -99,6 +105,13 @@ namespace UnityMCP.UI
         /// <summary>联合生成且为先预制体再脚本（由 AI 判断 combinedOrder 决定）。</summary>
         public bool CombinedPrefabFirst;
 
+        /// <summary>待删除的资源路径（<see cref="MessageTypeEnum.AssetDeleteReady"/>）。</summary>
+        public List<string> AssetDeletePaths = new();
+
+        /// <summary>资源整理：解析成功的 envelope。</summary>
+        public AssetOpsEnvelopeDto? AssetOpsEnvelope;
+        public int AssetOpsExecutedStepCount;
+
         // 快捷创建文本消息
         public static ChatMessage CreateText(ChatRole role, string text) => new()
         {
@@ -134,7 +147,10 @@ namespace UnityMCP.UI
                 CodeGenerationTime = a.CodeGenerationTime,
                 CodeTokensUsed = a.CodeTokensUsed,
                 CompileWaitTicks = a.CompileWaitTicks,
-                CombinedPrefabFirst = a.CombinedPrefabFirst
+                CombinedPrefabFirst = a.CombinedPrefabFirst,
+                AssetDeletePaths = new List<string>(a.AssetDeletePaths),
+                AssetOpsEnvelope = a.AssetOpsEnvelope,
+                AssetOpsExecutedStepCount = a.AssetOpsExecutedStepCount
             };
         }
     }
@@ -144,7 +160,8 @@ namespace UnityMCP.UI
     /// </summary>
     public class AIQuickCommand : EditorWindow
     {
-        private static readonly string[] MODE_LABELS = { "AI判断", "生成代码", "生成预制体", "联合生成", "场景操控", "项目查询" };
+        private static readonly string[] MODE_LABELS =
+            { "AI判断", "生成代码", "生成预制体", "联合生成", "场景操控", "项目查询", "删除资源", "整理资源" };
 
         #region Fields
 
@@ -520,6 +537,16 @@ namespace UnityMCP.UI
                 EditorGUILayout.Space(10);
                 EditorGUILayout.LabelField("(基于项目扫描数据回答)", EditorStyles.miniLabel, GUILayout.Width(160));
             }
+            else if (_currentMode == GenerateMode.AssetDelete)
+            {
+                EditorGUILayout.Space(10);
+                EditorGUILayout.LabelField("(删除 Project 内资源，非写代码)", EditorStyles.miniLabel, GUILayout.Width(200));
+            }
+            else if (_currentMode == GenerateMode.AssetOps)
+            {
+                EditorGUILayout.Space(10);
+                EditorGUILayout.LabelField("(移动/复制/建文件夹，asset-ops)", EditorStyles.miniLabel, GUILayout.Width(220));
+            }
 
             GUILayout.FlexibleSpace();
 
@@ -545,12 +572,22 @@ namespace UnityMCP.UI
                 return (int)GenerateMode.Combined;
             if (_currentMode == GenerateMode.ProjectQuery)
                 return 5;
+            if (_currentMode == GenerateMode.AssetDelete)
+                return 6;
+            if (_currentMode == GenerateMode.AssetOps)
+                return 7;
             return (int)_currentMode;
         }
 
         private void SetModeFromToolbarPopupIndex(int idx)
         {
-            _currentMode = idx == 5 ? GenerateMode.ProjectQuery : (GenerateMode)idx;
+            _currentMode = idx switch
+            {
+                5 => GenerateMode.ProjectQuery,
+                6 => GenerateMode.AssetDelete,
+                7 => GenerateMode.AssetOps,
+                _ => (GenerateMode)idx
+            };
         }
 
         private const string WorkspaceScopeHelpBody =
@@ -867,6 +904,12 @@ namespace UnityMCP.UI
                 case MessageTypeEnum.SceneOpsReady:
                     DrawSceneOpsReadyState(msg);
                     break;
+                case MessageTypeEnum.AssetDeleteReady:
+                    DrawAssetDeleteReadyState(msg);
+                    break;
+                case MessageTypeEnum.AssetOpsReady:
+                    DrawAssetOpsReadyState(msg);
+                    break;
                 case MessageTypeEnum.SuccessResult:
                     DrawSuccessState(msg);
                     break;
@@ -892,6 +935,8 @@ namespace UnityMCP.UI
                 GenerateMode.Combined => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
                 GenerateMode.SceneOps => "描述在当前场景要做的事情，如：在根下建空物体 Door，加 BoxCollider；或把 Props/Crate 挂到选中物体下；或实例化 Assets/.../Enemy.prefab",
                 GenerateMode.ProjectQuery => "根据当前工程真实数据提问，如：项目里有哪些预制体、脚本大概有多少、用了哪些包",
+                GenerateMode.AssetDelete => "说明要删除的资源：路径或名称，例如：删掉 Assets/Prefabs/Generated/Old.prefab 或某张贴图",
+                GenerateMode.AssetOps => "说明要如何整理 Assets：例如把某文件夹下材质移到 Archive、批量重命名、复制 prefab、新建 Assets/.../UI 文件夹",
                 _ => ""
             };
 
@@ -1074,6 +1119,145 @@ namespace UnityMCP.UI
             EditorGUILayout.EndHorizontal();
         }
 
+        private void DrawAssetDeleteReadyState(ChatMessage msg)
+        {
+            var tw = AssistantBubbleTextWidth();
+            DrawSelectableLabel("✅ 已解析待删除资源（请确认后执行）", _assistantBubbleStyle!, tw);
+            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel, tw);
+
+            if (!string.IsNullOrWhiteSpace(msg.Content))
+            {
+                EditorGUILayout.Space(4);
+                DrawSelectableLabel(msg.Content, EditorStyles.wordWrappedMiniLabel, tw);
+            }
+
+            if (msg.AssetDeletePaths is { Count: > 0 })
+            {
+                EditorGUILayout.Space(4);
+                foreach (var p in msg.AssetDeletePaths)
+                    DrawSelectableLabel("• " + p, EditorStyles.miniLabel, tw);
+            }
+
+            EditorGUILayout.Space(5);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("确认删除", GUILayout.Height(28)))
+                ExecuteConfirmedAssetDelete(msg);
+            if (GUILayout.Button("取消", GUILayout.Height(28)))
+            {
+                msg.Type = MessageTypeEnum.Text;
+                msg.Content = "已取消删除。";
+                msg.AssetDeletePaths.Clear();
+                PersistChatHistory();
+                Repaint();
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void ExecuteConfirmedAssetDelete(ChatMessage msg)
+        {
+            if (msg.AssetDeletePaths == null || msg.AssetDeletePaths.Count == 0)
+                return;
+
+            var ok = 0;
+            var failed = new List<string>();
+            foreach (var path in msg.AssetDeletePaths)
+            {
+                if (!AssetPathSecurity.TryValidateGenericAssetPath(path, out var norm, out var err))
+                {
+                    failed.Add($"{path}: {err}");
+                    continue;
+                }
+
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(norm) == null)
+                {
+                    failed.Add($"{norm}（资源不存在或已删除）");
+                    continue;
+                }
+
+                if (AssetDatabase.DeleteAsset(norm))
+                    ok++;
+                else
+                    failed.Add($"{norm}（DeleteAsset 失败）");
+            }
+
+            AssetDatabase.Refresh();
+            msg.Type = MessageTypeEnum.Text;
+            msg.AssetDeletePaths.Clear();
+            msg.Content = failed.Count == 0
+                ? $"已删除 {ok} 个资源。"
+                : $"已删除 {ok} 个资源。\n\n失败或跳过：\n" + string.Join("\n", failed);
+            PersistChatHistory();
+            Repaint();
+            ScrollToBottom();
+        }
+
+        private static string BuildAssetOpsStepSummary(AssetOpsEnvelopeDto env)
+        {
+            if (env.operations == null || env.operations.Length == 0)
+                return "（无步骤）";
+            var parts = new List<string>();
+            foreach (var op in env.operations)
+            {
+                var o = string.IsNullOrWhiteSpace(op.op) ? "?" : op.op.Trim();
+                parts.Add(o);
+            }
+
+            return $"共 {env.operations.Length} 步: " + string.Join(" → ", parts);
+        }
+
+        private void DrawAssetOpsReadyState(ChatMessage msg)
+        {
+            var tw = AssistantBubbleTextWidth();
+            DrawSelectableLabel("✅ 资源整理步骤已生成（请预览后执行）", _assistantBubbleStyle!, tw);
+            DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}", EditorStyles.miniLabel, tw);
+
+            if (msg.AssetOpsEnvelope != null)
+            {
+                EditorGUILayout.Space(4);
+                DrawSelectableLabel(BuildAssetOpsStepSummary(msg.AssetOpsEnvelope), EditorStyles.wordWrappedMiniLabel, tw);
+            }
+
+            if (!string.IsNullOrWhiteSpace(msg.Content))
+            {
+                EditorGUILayout.Space(4);
+                DrawSelectableLabel(msg.Content, EditorStyles.wordWrappedMiniLabel, tw);
+            }
+
+            EditorGUILayout.Space(5);
+            if (GUILayout.Button("执行资源整理", GUILayout.Height(28)))
+                ExecuteAssetOps(msg);
+        }
+
+        private void ExecuteAssetOps(ChatMessage msg)
+        {
+            if (msg.AssetOpsEnvelope == null)
+            {
+                EditorUtility.DisplayDialog("资源整理", "内部错误：未找到已解析的操作列表。", "确定");
+                return;
+            }
+
+            var batch = MainThread.IsMainThread
+                ? AssetOpsExecutor.Execute(msg.AssetOpsEnvelope)
+                : MainThread.Run(() => AssetOpsExecutor.Execute(msg.AssetOpsEnvelope));
+
+            if (batch.Success)
+            {
+                msg.AssetOpsExecutedStepCount = batch.StepsCompleted;
+                msg.Type = MessageTypeEnum.SuccessResult;
+                _isGenerating = false;
+                PersistChatHistory();
+                Repaint();
+                ScrollToBottom();
+                return;
+            }
+
+            EditorUtility.DisplayDialog(
+                "资源整理失败",
+                batch.Error ?? "未知错误",
+                "确定");
+        }
+
         private void DrawWaitingCompileState(ChatMessage msg)
         {
             var tw = AssistantBubbleTextWidth();
@@ -1103,6 +1287,7 @@ namespace UnityMCP.UI
             string text = msg.Mode switch
             {
                 GenerateMode.SceneOps => "🎉 场景操控执行成功！",
+                GenerateMode.AssetOps => "🎉 资源整理执行成功！",
                 GenerateMode.Combined when !string.IsNullOrEmpty(msg.SavedPrefabPath) => "🎉 联合生成最终完成！",
                 GenerateMode.CombinedPrefabFirst when !string.IsNullOrEmpty(msg.SavedPrefabPath) && !string.IsNullOrEmpty(msg.SavedScriptPath) => "🎉 联合生成最终完成！",
                 GenerateMode.Code => "🎉 代码生成并保存成功！",
@@ -1123,6 +1308,9 @@ namespace UnityMCP.UI
                 DrawSelectableLabel(
                     $"场景操控：已执行 {msg.SceneOpsExecutedStepCount} 步，跳过 {msg.SceneOpsSkippedStepCount} 步（工作区确认）",
                     EditorStyles.miniLabel, tw);
+
+            if (msg.Mode == GenerateMode.AssetOps)
+                DrawSelectableLabel($"资源整理：已执行 {msg.AssetOpsExecutedStepCount} 步。", EditorStyles.miniLabel, tw);
 
             if (msg.PrefabWarnings.Count > 0)
             {
@@ -1254,6 +1442,14 @@ namespace UnityMCP.UI
                     AddTextBubble("⏳ 正在根据项目上下文回答，请稍候...");
                     ProjectQueryAsync(context);
                     break;
+                case GenerateMode.AssetDelete:
+                    AddTextBubble("⏳ 正在解析待删除资源列表，请稍候...");
+                    AssetDeleteAsync(context);
+                    break;
+                case GenerateMode.AssetOps:
+                    AddTextBubble("⏳ 正在生成资源整理步骤，请稍候...");
+                    GenerateAssetOpsAsync(context);
+                    break;
             }
             ScrollToBottom();
         }
@@ -1288,6 +1484,8 @@ namespace UnityMCP.UI
             GenerationRoute.Both => combinedPrefabFirst ? GenerateMode.CombinedPrefabFirst : GenerateMode.Combined,
             GenerationRoute.SceneOps => GenerateMode.SceneOps,
             GenerationRoute.ProjectQuery => GenerateMode.ProjectQuery,
+            GenerationRoute.AssetDelete => GenerateMode.AssetDelete,
+            GenerationRoute.AssetOps => GenerateMode.AssetOps,
             _ => GenerateMode.Code
         };
 
@@ -1299,6 +1497,8 @@ namespace UnityMCP.UI
             GenerateMode.CombinedPrefabFirst => "联合生成（先预制体 + 脚本）",
             GenerateMode.SceneOps => "场景操控（unity-ops）",
             GenerateMode.ProjectQuery => "项目查询（盘点预制体等）",
+            GenerateMode.AssetDelete => "删除 Project 资源",
+            GenerateMode.AssetOps => "整理资源（asset-ops）",
             _ => mode.ToString()
         };
 
@@ -1356,7 +1556,8 @@ namespace UnityMCP.UI
 
                 var label = ModeDecisionLabel(resolvedMode);
                 var codeHint = resolvedMode != GenerateMode.Prefab && resolvedMode != GenerateMode.SceneOps &&
-                               resolvedMode != GenerateMode.ProjectQuery
+                               resolvedMode != GenerateMode.ProjectQuery && resolvedMode != GenerateMode.AssetDelete &&
+                               resolvedMode != GenerateMode.AssetOps
                     ? $"（代码类型：{PromptBuilder.CodeTypeLabels[(int)intent.CodeType]}）"
                     : "";
                 if (resolvedMode == GenerateMode.CombinedPrefabFirst)
@@ -1388,6 +1589,14 @@ namespace UnityMCP.UI
                     case GenerateMode.ProjectQuery:
                         AddTextBubble("⏳ 正在根据项目上下文回答，请稍候...");
                         ProjectQueryAsync(context);
+                        break;
+                    case GenerateMode.AssetDelete:
+                        AddTextBubble("⏳ 正在解析待删除资源列表，请稍候...");
+                        AssetDeleteAsync(context);
+                        break;
+                    case GenerateMode.AssetOps:
+                        AddTextBubble("⏳ 正在生成资源整理步骤，请稍候...");
+                        GenerateAssetOpsAsync(context);
                         break;
                     default:
                         context.ErrorMessage = $"内部错误：未知解析模式 {resolvedMode}";
@@ -1611,12 +1820,78 @@ namespace UnityMCP.UI
                 context.GenerationTime = response.Duration;
                 context.TokensUsed = response.TokensUsed;
                 context.Type = MessageTypeEnum.SceneOpsReady;
+                _isGenerating = false;
                 AddResultBubble(context);
             }
             catch (Exception ex)
             {
                 AiExchangeDebugLog.AppendException("场景操控 JSON", ex);
                 context.ErrorMessage = $"生成场景操控列表时出错: {ex.Message}";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            finally
+            {
+                Repaint();
+            }
+        }
+
+        private async void GenerateAssetOpsAsync(ChatMessage context)
+        {
+            if (_config == null)
+            {
+                context.ErrorMessage = "AI 服务未配置。";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+                return;
+            }
+
+            try
+            {
+                var service = AIServiceFactory.Create(_config);
+                var projContext = ProjectContext.Collect();
+                var systemPrompt = PromptBuilder.BuildAssetOpsSystemPrompt(projContext);
+                var userPrompt = PromptBuilder.BuildAssetOpsUserPrompt(context.Content);
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange("资源整理 JSON", response, $"memoryTurns={memory?.Count ?? 0}");
+
+                if (!response.Success)
+                {
+                    context.ErrorMessage = response.Error ?? "AI 返回了未知错误";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                var parse = AssetOpsParser.Parse(response.Content ?? "");
+                if (!parse.Success || parse.Envelope == null)
+                {
+                    context.ErrorMessage = parse.Error ?? "无法解析 asset-ops JSON";
+                    if (!string.IsNullOrEmpty(response.Content))
+                        context.ErrorMessage += $"\n\nAI 原始输出:\n{response.Content}";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                context.AssetOpsEnvelope = parse.Envelope;
+                context.RawJson = parse.RawJson;
+                context.GenerationTime = response.Duration;
+                context.TokensUsed = response.TokensUsed;
+                context.Type = MessageTypeEnum.AssetOpsReady;
+                context.Content = "将按顺序执行下列资源操作（可在 Project 中 Ctrl+Z 尝试撤销部分步骤）：";
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            catch (Exception ex)
+            {
+                AiExchangeDebugLog.AppendException("资源整理 JSON", ex);
+                context.ErrorMessage = $"生成资源整理步骤时出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
                 AddResultBubble(context);
@@ -1669,6 +1944,74 @@ namespace UnityMCP.UI
             {
                 AiExchangeDebugLog.AppendException("项目查询", ex);
                 context.ErrorMessage = $"项目查询时出错: {ex.Message}";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            finally
+            {
+                Repaint();
+            }
+        }
+
+        private async void AssetDeleteAsync(ChatMessage context)
+        {
+            if (_config == null)
+            {
+                context.ErrorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+                return;
+            }
+
+            try
+            {
+                var service = AIServiceFactory.Create(_config);
+                var projContext = ProjectContext.Collect();
+                var systemPrompt = PromptBuilder.BuildAssetDeleteSystemPrompt(projContext);
+                var userPrompt = PromptBuilder.BuildAssetDeleteUserPrompt(context.Content);
+                var memory = BuildChatMemory(context.Content);
+                var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
+                LogAiExchange("删除预制体", response, $"memoryTurns={memory?.Count ?? 0}");
+
+                if (!response.Success)
+                {
+                    context.ErrorMessage = response.Error ?? "AI 返回了未知错误";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                var parse = AssetDeleteParser.Parse(response.Content ?? "");
+                if (!parse.Success)
+                {
+                    context.ErrorMessage = parse.Error ?? "无法解析删除列表";
+                    context.Type = MessageTypeEnum.Error;
+                    if (!string.IsNullOrEmpty(response.Content))
+                        context.ErrorMessage += $"\n\nAI 原始输出:\n{response.Content}";
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                context.AssetDeletePaths = new List<string>(parse.NormalizedPaths);
+                context.RawJson = parse.RawJson;
+                var note = parse.Envelope?.note ?? "";
+                context.Content = string.IsNullOrWhiteSpace(note)
+                    ? "以下资源将被删除（请确认）："
+                    : note.Trim();
+                context.GenerationTime = response.Duration;
+                context.TokensUsed = response.TokensUsed;
+                context.Type = MessageTypeEnum.AssetDeleteReady;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            catch (Exception ex)
+            {
+                AiExchangeDebugLog.AppendException("删除预制体", ex);
+                context.ErrorMessage = $"删除预制体解析时出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
                 AddResultBubble(context);
