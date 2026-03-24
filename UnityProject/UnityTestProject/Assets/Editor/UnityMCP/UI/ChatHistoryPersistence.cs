@@ -48,6 +48,8 @@ namespace UnityMCP.UI
             public int sceneOpsExecuted;
             public int sceneOpsSkipped;
             public int compileWaitTicks;
+            public bool compileWaitFinished;
+            public bool compileWaitCancelled;
             public string assetDeletePathsJoined = "";
             public string inlineActionsClicked = "";
         }
@@ -133,6 +135,8 @@ namespace UnityMCP.UI
                 sceneOpsExecuted = m.SceneOpsExecutedStepCount,
                 sceneOpsSkipped = m.SceneOpsSkippedStepCount,
                 compileWaitTicks = m.CompileWaitTicks,
+                compileWaitFinished = m.CompileWaitFinished,
+                compileWaitCancelled = m.CompileWaitCancelled,
                 assetDeletePathsJoined = string.Join("\n", m.AssetDeletePaths ?? new List<string>()),
                 inlineActionsClicked = m.InlineActionsClicked ?? ""
             };
@@ -162,6 +166,8 @@ namespace UnityMCP.UI
                 SceneOpsExecutedStepCount = p.sceneOpsExecuted,
                 SceneOpsSkippedStepCount = p.sceneOpsSkipped,
                 CompileWaitTicks = p.compileWaitTicks,
+                CompileWaitFinished = p.compileWaitFinished,
+                CompileWaitCancelled = p.compileWaitCancelled,
                 InlineActionsClicked = p.inlineActionsClicked ?? ""
             };
 

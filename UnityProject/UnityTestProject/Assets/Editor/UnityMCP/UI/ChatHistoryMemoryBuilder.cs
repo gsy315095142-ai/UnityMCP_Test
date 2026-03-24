@@ -103,10 +103,18 @@ namespace UnityMCP.UI
                     return StripSimpleRichText(t);
                 }
                 case MessageTypeEnum.CodeGenerated:
+                    if (!string.IsNullOrEmpty(m.SavedScriptPath))
+                        return $"[代码] 已保存: {m.SavedScriptPath}（类名: {m.ScriptName}）。";
                     return $"[代码] 已生成 C# 草案，类名: {m.ScriptName}（可在窗口中预览或保存）。";
                 case MessageTypeEnum.WaitingCompile:
+                    if (m.CompileWaitCancelled)
+                        return $"[联合生成] 脚本已保存: {m.SavedScriptPath}，已取消继续生成预制体。";
+                    if (m.CompileWaitFinished)
+                        return $"[联合生成] 脚本已保存: {m.SavedScriptPath}，编译已完成。";
                     return $"[联合生成] 脚本已保存: {m.SavedScriptPath}，等待编译后继续预制体。";
                 case MessageTypeEnum.PrefabGenerated:
+                    if (!string.IsNullOrEmpty(m.SavedPrefabPath))
+                        return $"[预制体] 已保存: {m.SavedPrefabPath}（名称: {m.PrefabName}）。";
                     return $"[预制体] 已生成描述，预制体名: {m.PrefabName}。";
                 case MessageTypeEnum.SceneOpsReady:
                     return "[场景操控] 已生成 unity-ops 步骤: " + SummarizeSceneOpsEnvelope(m.SceneOpsEnvelope);
