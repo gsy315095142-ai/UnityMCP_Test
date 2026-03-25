@@ -497,7 +497,14 @@ namespace UnityMCP.Tools
         /// <summary>
         /// 解析 AI 输出的 <see cref="AssetDeleteIntentRootDto"/>，并由插件将意图解析为工程内可删除路径；失败时回退旧版 <c>assetPaths</c>。
         /// </summary>
-        public static AssetDeleteIntentResolveResult ParseAndResolveDeleteIntent(string textOrAiOutput, ProjectContext ctx)
+        /// <param name="selectionSnapshot">
+        /// 提交时捕获的编辑器选中路径快照（<c>AIQuickCommand.SnapshotEditorSelection()</c> 的结果）。
+        /// 当 AI 返回空 hints 时用于插件侧兜底，传 <c>null</c> 则仅依赖 nameHint/pathHint。
+        /// </param>
+        public static AssetDeleteIntentResolveResult ParseAndResolveDeleteIntent(
+            string textOrAiOutput,
+            ProjectContext ctx,
+            List<string>? selectionSnapshot = null)
         {
             if (string.IsNullOrWhiteSpace(textOrAiOutput))
                 return AssetDeleteIntentResolveResult.Fail("输入为空", "");
@@ -524,7 +531,7 @@ namespace UnityMCP.Tools
                 root.assetDeleteIntent.targets != null &&
                 root.assetDeleteIntent.targets.Length > 0)
             {
-                var paths = ResolvePathsFromIntent(ctx, root.assetDeleteIntent);
+                var paths = ResolvePathsFromIntent(ctx, root.assetDeleteIntent, selectionSnapshot);
                 if (paths.Count > 0)
                     return AssetDeleteIntentResolveResult.Ok(paths, root.assetDeleteIntent.note ?? "", json, false);
 
@@ -558,7 +565,10 @@ namespace UnityMCP.Tools
             return result.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
-        private static List<string> ResolvePathsFromIntent(ProjectContext ctx, AssetDeleteIntentDto intent)
+        private static List<string> ResolvePathsFromIntent(
+            ProjectContext ctx,
+            AssetDeleteIntentDto intent,
+            List<string>? selectionSnapshot = null)
         {
             var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (intent.targets == null)
@@ -569,6 +579,21 @@ namespace UnityMCP.Tools
                 if (t == null)
                     continue;
                 var kind = string.IsNullOrWhiteSpace(t.kind) ? "unknown" : t.kind.Trim().ToLowerInvariant();
+
+                // 当 nameHint 与 pathHint 均为空时，兜底用快照；快照也为空则实时读 Selection
+                if (string.IsNullOrWhiteSpace(t.nameHint) && string.IsNullOrWhiteSpace(t.pathHint))
+                {
+                    var selPaths = (selectionSnapshot != null && selectionSnapshot.Count > 0)
+                        ? selectionSnapshot
+                        : GetSelectedAssetPaths().ToList();
+                    foreach (var selPath in selPaths)
+                    {
+                        if (MatchesKindFilter(selPath, kind) && AssetExistsForDelete(selPath))
+                            result.Add(selPath);
+                    }
+                    continue;
+                }
+
                 switch (kind)
                 {
                     case "script":
@@ -606,6 +631,40 @@ namespace UnityMCP.Tools
             }
 
             return result.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        /// <summary>
+        /// 返回编辑器 Project 窗口中当前选中的资源 Assets/ 路径列表。
+        /// </summary>
+        private static IEnumerable<string> GetSelectedAssetPaths()
+        {
+            foreach (var obj in UnityEditor.Selection.objects)
+            {
+                if (obj == null) continue;
+                var path = AssetDatabase.GetAssetPath(obj);
+                if (!string.IsNullOrEmpty(path) && path.StartsWith("Assets/", StringComparison.Ordinal))
+                    yield return path;
+            }
+        }
+
+        /// <summary>
+        /// 简单按扩展名判断路径是否符合 kind 过滤（unknown 不过滤）。
+        /// </summary>
+        private static bool MatchesKindFilter(string path, string kind)
+        {
+            return kind switch
+            {
+                "prefab"   => path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase),
+                "script"   => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase),
+                "material" => path.EndsWith(".mat", StringComparison.OrdinalIgnoreCase),
+                "scene"    => path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase),
+                "texture2d" or "texture" =>
+                    path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith(".tga", StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith(".psd", StringComparison.OrdinalIgnoreCase),
+                _ => true  // unknown / asset_path 不过滤
+            };
         }
 
         private static string CombineTargetHints(AssetDeleteIntentTargetDto t)

@@ -1,5 +1,8 @@
 #nullable enable
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
@@ -522,12 +525,65 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 若无法按上述格式输出，可退化为旧格式 `{{ ""assetPaths"": [...], ""note"": """" }}`，路径须为真实 **Assets/** 开头且存在于工程；否则请优先使用 **assetDeleteIntent**。";
         }
 
-        public static string BuildAssetDeleteUserPrompt(string userRequest)
+        /// <param name="selectionSnapshot">
+        /// 由调用方在提交时捕获的编辑器选中路径快照（<c>AIQuickCommand.SnapshotEditorSelection()</c> 的结果）。
+        /// 传 <c>null</c> 或空列表时会退回到实时读 <c>Selection.objects</c>（兼容旧调用路径）。
+        /// </param>
+        public static string BuildAssetDeleteUserPrompt(string userRequest, List<string>? selectionSnapshot = null)
         {
             return $@"用户需求（原文）：
 {userRequest}
 
+{BuildAssetDeleteEditorHint(selectionSnapshot)}
+
 请只输出 ```json 代码块，使用 **assetDeleteIntent**（version=1）表达删除意图；由插件解析路径。不要输出解释性正文。";
+        }
+
+        /// <summary>
+        /// 注入编辑器选中的资源路径，供 AI 填入 pathHint。
+        /// 优先使用调用方在用户提交时捕获的快照（避免弹窗/异步导致 Selection 被清空）；
+        /// 若快照为空则回退到实时读 Selection.objects 与 Hierarchy 预制体实例。
+        /// </summary>
+        private static string BuildAssetDeleteEditorHint(List<string>? snapshot = null)
+        {
+            // 使用快照；若快照为空则实时读（兜底）
+            var selectedPaths = snapshot != null && snapshot.Count > 0
+                ? snapshot
+                : CollectEditorSelectionFallback();
+
+            if (selectedPaths.Count == 0)
+                return "## 编辑器选中状态（Project 窗口 / Hierarchy）\n当前**未选中**任何 Project 资源。若用户说「删除选中的/当前的资源」，targets 里请填写用户提到的名称到 nameHint，不要留空。";
+
+            var lines = string.Join("\n", selectedPaths.Select(p => $"  - `{p}`"));
+            return $@"## 编辑器选中状态（Project 窗口 / Hierarchy）
+当前**已选中** {selectedPaths.Count} 个 Project 资源（这就是「当前选中」「选中的」「这个」所指的资源）：
+{lines}
+
+**规则**：若用户说「删除选中的/当前的/这个资源/预制体/脚本」，请把上述路径逐一填入 target 的 **pathHint** 字段（kind 按文件类型选 prefab/script/material 等，或用 asset_path）。**不要**把 nameHint 和 pathHint 都留空然后在 note 里说「依赖选中项」。";
+        }
+
+        /// <summary>
+        /// 实时读编辑器选中状态的兜底方法（当快照为空时使用）。
+        /// 同时处理 Project 窗口资源 和 Hierarchy 预制体实例。
+        /// </summary>
+        private static List<string> CollectEditorSelectionFallback()
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var obj in Selection.objects)
+            {
+                if (obj == null) continue;
+                var path = AssetDatabase.GetAssetPath(obj);
+                if (!string.IsNullOrEmpty(path) && path.StartsWith("Assets/", StringComparison.Ordinal))
+                    result.Add(path);
+            }
+            foreach (var go in Selection.gameObjects)
+            {
+                if (go == null) continue;
+                var prefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go);
+                if (!string.IsNullOrEmpty(prefabPath) && prefabPath.StartsWith("Assets/", StringComparison.Ordinal))
+                    result.Add(prefabPath);
+            }
+            return result.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         private const string AssetOpsFormatFewShot = @"
@@ -928,17 +984,19 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 ## UI 预制体规则（重要）
 如果用户要求创建 UI 元素，**严格按示例二的结构输出**：
 1. **根对象**（Canvas）必须挂 Canvas + CanvasScaler + GraphicRaycaster；Canvas 的 renderMode 设 `ScreenSpaceOverlay`；CanvasScaler 的 uiScaleMode 设 `ScaleWithScreenSize`，referenceResolution `1920, 1080`
-2. **坐标协议**：所有 UI 对象（Canvas 根节点除外）使用顶层字段 **`anchoredPosition`**（像素，相对锚点）和 **`sizeDelta`**（像素宽高）；同时也保留 `position: [0,0,0]`（插件优先读 anchoredPosition）
-3. **锚点**：Canvas 根 `anchorMin:[0,0]` `anchorMax:[1,1]`；Button / Image / Panel 等固定大小控件用 `anchorMin:[0.5,0.5]` `anchorMax:[0.5,0.5]`；全屏背景用 `anchorMin:[0,0]` `anchorMax:[1,1]` + `sizeDelta:[0,0]`；`pivot:[0.5,0.5]`
-4. **Button**：每个 Button 必须有子对象挂 **TextMeshProUGUI** 显示按钮文字（`anchorMin:[0,0]` `anchorMax:[1,1]` `sizeDelta:[0,0]`）
-5. **InputField**：子对象需 Placeholder 和 Text（均挂 TextMeshProUGUI）
-6. **不要**为 UI 对象设置 `primitive` 字段；`scale` 始终保持 `[1,1,1]`
-7. 参考坐标：1920×1080 参考分辨率，屏幕中心为 (0,0)，左下角约 (-960,-540)
+2. **背景面板（强制）**：Canvas 的**第一个子对象必须是背景面板**（名称如 `Panel` / `DialogPanel` / `Background`），挂 `Image` 组件并设置合适颜色（如半透明深色 `#1E1E1ECC` 或浅色 `#FFFFFFEE`）。面板居中（`anchorMin:[0.5,0.5]` `anchorMax:[0.5,0.5]`），`sizeDelta` 根据内容定（建议宽 600~900，高 300~600）。**所有按钮、文字等控件都作为面板的子对象**，而不是 Canvas 的直接子对象（除非是全屏背景图）。
+3. **坐标协议**：所有 UI 对象（Canvas 根节点除外）使用顶层字段 **`anchoredPosition`**（像素，相对锚点）和 **`sizeDelta`**（像素宽高）；同时也保留 `position: [0,0,0]`（插件优先读 anchoredPosition）
+4. **锚点**：Canvas 根 `anchorMin:[0,0]` `anchorMax:[1,1]`；Panel / Button / Image 等固定大小控件用 `anchorMin:[0.5,0.5]` `anchorMax:[0.5,0.5]`；全屏背景用 `anchorMin:[0,0]` `anchorMax:[1,1]` + `sizeDelta:[0,0]`；`pivot:[0.5,0.5]`
+5. **Button**：每个 Button 必须有子对象挂 **TextMeshProUGUI** 显示按钮文字（`anchorMin:[0,0]` `anchorMax:[1,1]` `sizeDelta:[0,0]`）
+6. **标题文字**：面板内顶部放一个 TextMeshProUGUI 作为标题，`anchoredPosition` y 值 ≈ 面板高/2 - 60
+7. **InputField**：子对象需 Placeholder 和 Text（均挂 TextMeshProUGUI）
+8. **不要**为 UI 对象设置 `primitive` 字段；`scale` 始终保持 `[1,1,1]`
+9. 参考坐标：1920×1080 参考分辨率，面板内坐标原点在面板中心，左下角约 (-面板宽/2, -面板高/2)
 
 ## UI 排版指南（防止控件重叠）
 - **多个按钮横排**：用 anchoredPosition 的 x 分量拉开距离。2 个按钮、宽 280：左按钮 x=-200，右按钮 x=+200（间距 (200-(-200)) - 280 = 120px 空白）；3 个按钮类推。
 - **多个按钮竖排**：用 anchoredPosition 的 y 分量拉开。上按钮 y=+60，下按钮 y=-60（行高 80 + 40px 间距）。
-- **面板内部布局**：标题放顶部（y = 面板高/2 - 50），按钮放底部（y = -(面板高/2 - 60)）。
+- **面板内部布局**：标题放顶部（y = 面板高/2 - 60），按钮放底部（y = -(面板高/2 - 70)）。
 - **禁止**多个同级 UI 控件全用 anchoredPosition [0,0]（会叠在同一位置）。
 - **最小间距规则**：相邻控件边缘距离至少 20px；`| x差值 | ≥ (宽度1 + 宽度2)/2 + 20`。
 

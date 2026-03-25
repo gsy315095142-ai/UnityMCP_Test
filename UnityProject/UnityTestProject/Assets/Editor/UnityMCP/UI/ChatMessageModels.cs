@@ -108,6 +108,12 @@ namespace UnityMCP.UI
         /// <summary>待删除的资源路径（<see cref="MessageTypeEnum.AssetDeleteReady"/>）。</summary>
         public List<string> AssetDeletePaths = new();
 
+        /// <summary>
+        /// 任务提交瞬间捕获的编辑器 Project / Hierarchy 选中资源路径快照（Assets/ 开头）。
+        /// 在 StartNewTask() 时设置，用于 AssetDelete 等需要上下文选中信息的流程。
+        /// </summary>
+        public List<string> SelectedAssetPaths = new();
+
         /// <summary>资源整理：解析成功的 envelope。</summary>
         public AssetOpsEnvelopeDto? AssetOpsEnvelope;
         public int AssetOpsExecutedStepCount;
@@ -154,6 +160,7 @@ namespace UnityMCP.UI
                 CompileWaitCancelled = a.CompileWaitCancelled,
                 CombinedPrefabFirst = a.CombinedPrefabFirst,
                 AssetDeletePaths = new List<string>(a.AssetDeletePaths),
+                SelectedAssetPaths = new List<string>(a.SelectedAssetPaths),
                 AssetOpsEnvelope = a.AssetOpsEnvelope,
                 AssetOpsExecutedStepCount = a.AssetOpsExecutedStepCount,
                 InlineActionsClicked = a.InlineActionsClicked ?? ""

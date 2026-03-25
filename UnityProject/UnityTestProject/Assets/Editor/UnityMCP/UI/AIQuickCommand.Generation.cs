@@ -26,6 +26,9 @@ namespace UnityMCP.UI
             _userInput = "";
             GUI.FocusControl(null); 
 
+            // 在修改焦点/开始异步之前立即捕获编辑器选中状态
+            var selectionSnapshot = SnapshotEditorSelection();
+
             // 用户输入气泡
             _chatHistory.Add(ChatMessage.CreateText(ChatRole.User, userText));
             PersistChatHistory();
@@ -37,10 +40,43 @@ namespace UnityMCP.UI
                 Role = ChatRole.Assistant,
                 Content = userText, // 保存初始输入用于重试或传给下一步
                 Mode = _currentMode,
-                CodeType = _currentCodeType
+                CodeType = _currentCodeType,
+                SelectedAssetPaths = selectionSnapshot
             };
 
             ExecuteTaskPhase(contextMsg);
+        }
+
+        /// <summary>
+        /// 捕获当前编辑器选中的 Project 资源路径快照。
+        /// 同时处理两种情况：
+        ///   1. Project 窗口中直接选中的资源文件（.prefab / .cs / .mat ...）
+        ///   2. Hierarchy 中选中的预制体实例 → 反推 .prefab 资产路径
+        /// </summary>
+        private static List<string> SnapshotEditorSelection()
+        {
+            var paths = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 路径1：Project 窗口选中的资源
+            foreach (var obj in Selection.objects)
+            {
+                if (obj == null) continue;
+                var p = AssetDatabase.GetAssetPath(obj);
+                if (!string.IsNullOrEmpty(p) && p.StartsWith("Assets/", StringComparison.Ordinal))
+                    paths.Add(p);
+            }
+
+            // 路径2：Hierarchy 中选中的预制体实例 → 取其来源 .prefab 资产路径
+            foreach (var go in Selection.gameObjects)
+            {
+                if (go == null) continue;
+                // GetPrefabAssetPathOfNearestInstanceRoot 对非预制体实例返回空
+                var prefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go);
+                if (!string.IsNullOrEmpty(prefabPath) && prefabPath.StartsWith("Assets/", StringComparison.Ordinal))
+                    paths.Add(prefabPath);
+            }
+
+            return new List<string>(paths.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -687,7 +723,7 @@ namespace UnityMCP.UI
 
                 var service = AIServiceFactory.Create(_config);
                 var systemPrompt = PromptBuilder.BuildAssetDeleteSystemPrompt(projContext);
-                var userPrompt = PromptBuilder.BuildAssetDeleteUserPrompt(context.Content);
+                var userPrompt = PromptBuilder.BuildAssetDeleteUserPrompt(context.Content, context.SelectedAssetPaths);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
                 LogAiExchange("删除资源", response, $"memoryTurns={memory?.Count ?? 0}");
 
@@ -700,7 +736,7 @@ namespace UnityMCP.UI
                     return;
                 }
 
-                var resolved = AssetDeleteParser.ParseAndResolveDeleteIntent(response.Content ?? "", projContext);
+                var resolved = AssetDeleteParser.ParseAndResolveDeleteIntent(response.Content ?? "", projContext, context.SelectedAssetPaths);
                 if (!resolved.Success)
                 {
                     var hint = BuildAssetDeleteResolveHint(context.Content, response.Content, memory);
