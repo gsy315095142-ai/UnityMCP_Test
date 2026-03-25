@@ -343,19 +343,46 @@ namespace Game.Generated
 }
 ```
 
-## unity-ops 示例 4：在已有 UI 下加按钮（勿用 __selection__，须写明层级路径）
-用户：在 Canvas 里的面板上加一个可点按钮，文字为「确认」
-应输出类似（parentPath 用从场景根起的路径；常见为 Canvas/Panel 或 Canvas 下实际容器名）：
+## unity-ops 示例 4：从零在场景中搭建完整 UI（Canvas + 背景面板 + 按钮）
+用户：在当前场景里创建一个登录界面，有确认和取消两个按钮
+**关键规则**：
+- Button 前必须先 addComponent Image（提供背景）；同一对象上先 Image 后 Button
+- 设置颜色用 setComponentProperty + m_Color；设置布局用 setRectTransform
+- Canvas 必须同时加 CanvasScaler 和 GraphicRaycaster
+应输出类似：
 ```json
 {
   ""unityOpsVersion"": 1,
   ""operations"": [
-    { ""op"": ""createEmpty"", ""name"": ""BtnConfirm"", ""parentPath"": ""Canvas/Panel"" },
-    { ""op"": ""addComponent"", ""path"": ""Canvas/Panel/BtnConfirm"", ""typeName"": ""UnityEngine.UI.Button"" }
+    { ""op"": ""createEmpty"", ""name"": ""LoginCanvas"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas"", ""typeName"": ""Canvas"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas"", ""typeName"": ""CanvasScaler"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas"", ""typeName"": ""GraphicRaycaster"" },
+    { ""op"": ""createEmpty"", ""name"": ""Panel"", ""parentPath"": ""LoginCanvas"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel"", ""typeName"": ""Image"" },
+    { ""op"": ""setComponentProperty"", ""path"": ""LoginCanvas/Panel"", ""typeName"": ""Image"", ""serializedPropertyPath"": ""m_Color"", ""propertyValue"": ""#1E1E1ECC"" },
+    { ""op"": ""setRectTransform"", ""path"": ""LoginCanvas/Panel"", ""anchorMin"": ""0.5,0.5"", ""anchorMax"": ""0.5,0.5"", ""anchoredPosition"": ""0,0"", ""sizeDelta"": ""600,360"" },
+    { ""op"": ""createEmpty"", ""name"": ""BtnConfirm"", ""parentPath"": ""LoginCanvas/Panel"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel/BtnConfirm"", ""typeName"": ""Image"" },
+    { ""op"": ""setComponentProperty"", ""path"": ""LoginCanvas/Panel/BtnConfirm"", ""typeName"": ""Image"", ""serializedPropertyPath"": ""m_Color"", ""propertyValue"": ""#3A7FCAFF"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel/BtnConfirm"", ""typeName"": ""Button"" },
+    { ""op"": ""setRectTransform"", ""path"": ""LoginCanvas/Panel/BtnConfirm"", ""anchorMin"": ""0.5,0.5"", ""anchorMax"": ""0.5,0.5"", ""anchoredPosition"": ""-150,-100"", ""sizeDelta"": ""200,60"" },
+    { ""op"": ""createEmpty"", ""name"": ""Label"", ""parentPath"": ""LoginCanvas/Panel/BtnConfirm"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel/BtnConfirm/Label"", ""typeName"": ""TextMeshProUGUI"" },
+    { ""op"": ""setUiText"", ""path"": ""LoginCanvas/Panel/BtnConfirm/Label"", ""uiText"": ""确认"" },
+    { ""op"": ""setRectTransform"", ""path"": ""LoginCanvas/Panel/BtnConfirm/Label"", ""anchorMin"": ""0,0"", ""anchorMax"": ""1,1"", ""anchoredPosition"": ""0,0"", ""sizeDelta"": ""0,0"" },
+    { ""op"": ""createEmpty"", ""name"": ""BtnCancel"", ""parentPath"": ""LoginCanvas/Panel"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel/BtnCancel"", ""typeName"": ""Image"" },
+    { ""op"": ""setComponentProperty"", ""path"": ""LoginCanvas/Panel/BtnCancel"", ""typeName"": ""Image"", ""serializedPropertyPath"": ""m_Color"", ""propertyValue"": ""#C0392BFF"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel/BtnCancel"", ""typeName"": ""Button"" },
+    { ""op"": ""setRectTransform"", ""path"": ""LoginCanvas/Panel/BtnCancel"", ""anchorMin"": ""0.5,0.5"", ""anchorMax"": ""0.5,0.5"", ""anchoredPosition"": ""150,-100"", ""sizeDelta"": ""200,60"" },
+    { ""op"": ""createEmpty"", ""name"": ""Label"", ""parentPath"": ""LoginCanvas/Panel/BtnCancel"" },
+    { ""op"": ""addComponent"", ""path"": ""LoginCanvas/Panel/BtnCancel/Label"", ""typeName"": ""TextMeshProUGUI"" },
+    { ""op"": ""setUiText"", ""path"": ""LoginCanvas/Panel/BtnCancel/Label"", ""uiText"": ""取消"" },
+    { ""op"": ""setRectTransform"", ""path"": ""LoginCanvas/Panel/BtnCancel/Label"", ""anchorMin"": ""0,0"", ""anchorMax"": ""1,1"", ""anchoredPosition"": ""0,0"", ""sizeDelta"": ""0,0"" }
   ]
 }
 ```
-说明：UI 文案改 Text 子物体或需额外步骤；此处仅示范**父路径必须明确**，不要用 __selection__。
 
 ## unity-ops 示例 5：TMP 文案与 RectTransform 锚点
 ```json

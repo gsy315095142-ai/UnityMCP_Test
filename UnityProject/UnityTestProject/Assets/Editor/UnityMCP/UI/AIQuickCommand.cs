@@ -125,7 +125,6 @@ namespace UnityMCP.UI
 
         private void ResetAll()
         {
-            _userInput = "";
             _chatHistory.Clear();
             ChatHistoryPersistence.Clear();
             _isGenerating = false;

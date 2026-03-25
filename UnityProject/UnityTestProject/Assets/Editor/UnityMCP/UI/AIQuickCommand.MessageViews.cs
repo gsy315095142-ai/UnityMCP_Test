@@ -422,7 +422,9 @@ namespace UnityMCP.UI
                 return;
 
             var ok = 0;
+            var sceneInstancesRemoved = 0;
             var failed = new List<string>();
+
             foreach (var path in msg.AssetDeletePaths)
             {
                 if (!AssetPathSecurity.TryValidateGenericAssetPath(path, out var norm, out var err))
@@ -437,6 +439,13 @@ namespace UnityMCP.UI
                     continue;
                 }
 
+                // 删除预制体前，先移除场景中所有该预制体的实例
+                if (norm.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                {
+                    var removed = RemoveSceneInstancesOfPrefab(norm);
+                    sceneInstancesRemoved += removed;
+                }
+
                 if (AssetDatabase.DeleteAsset(norm))
                     ok++;
                 else
@@ -444,12 +453,65 @@ namespace UnityMCP.UI
             }
 
             AssetDatabase.Refresh();
+
+            var instanceNote = sceneInstancesRemoved > 0
+                ? $"，同时从场景中移除了 {sceneInstancesRemoved} 个预制体实例"
+                : "";
             var summary = failed.Count == 0
-                ? $"已删除 {ok} 个资源。"
-                : $"已删除 {ok} 个资源。\n\n失败或跳过：\n" + string.Join("\n", failed);
+                ? $"已删除 {ok} 个资源{instanceNote}。"
+                : $"已删除 {ok} 个资源{instanceNote}。\n\n失败或跳过：\n" + string.Join("\n", failed);
             AddTextBubble(summary);
             Repaint();
             ScrollToBottom();
+        }
+
+        /// <summary>
+        /// 在所有已加载场景中找到并销毁指定 .prefab 资产的所有实例根节点。
+        /// 使用 Undo 注册，支持 Ctrl+Z 撤销。
+        /// </summary>
+        /// <returns>成功销毁的实例数量。</returns>
+        private static int RemoveSceneInstancesOfPrefab(string prefabAssetPath)
+        {
+            var instanceRoots = new List<GameObject>();
+            for (var i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var scene = SceneManager.GetSceneAt(i);
+                if (!scene.isLoaded) continue;
+                foreach (var root in scene.GetRootGameObjects())
+                    CollectPrefabInstanceRoots(root, prefabAssetPath, instanceRoots);
+            }
+
+            foreach (var go in instanceRoots)
+            {
+                Undo.DestroyObjectImmediate(go);
+                // 标记所在场景已修改
+                UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(go.scene);
+            }
+
+            return instanceRoots.Count;
+        }
+
+        /// <summary>
+        /// 递归收集 <paramref name="go"/> 层级中所有属于 <paramref name="targetPrefabPath"/> 的实例根节点。
+        /// 找到实例根后不继续深入（避免重复收集嵌套实例）。
+        /// </summary>
+        private static void CollectPrefabInstanceRoots(
+            GameObject go,
+            string targetPrefabPath,
+            List<GameObject> result)
+        {
+            if (PrefabUtility.IsAnyPrefabInstanceRoot(go))
+            {
+                var path = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(go);
+                if (string.Equals(path, targetPrefabPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(go);
+                    return; // 不继续深入此预制体实例的子节点
+                }
+            }
+
+            foreach (Transform child in go.transform)
+                CollectPrefabInstanceRoots(child.gameObject, targetPrefabPath, result);
         }
 
         private static string BuildAssetOpsStepSummary(AssetOpsEnvelopeDto env)

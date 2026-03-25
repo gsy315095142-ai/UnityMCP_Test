@@ -56,10 +56,29 @@ namespace UnityMCP.Tools
                 if (parent != null)
                 {
                     Undo.SetTransformParent(go.transform, parent.transform, "Set Parent");
-                    Undo.RecordObject(go.transform, "Reset local TRS");
-                    go.transform.localPosition = Vector3.zero;
-                    go.transform.localRotation = Quaternion.identity;
-                    go.transform.localScale = Vector3.one;
+
+                    // 若父节点是 UI 层级（带 RectTransform），子节点也应使用 RectTransform
+                    // new GameObject() 默认只有 Transform，需手动替换
+                    if (parent.GetComponent<RectTransform>() != null && go.GetComponent<RectTransform>() == null)
+                    {
+                        Undo.AddComponent<RectTransform>(go);
+                        // RectTransform 添加后重置锚点与位置为居中
+                        var rt = go.GetComponent<RectTransform>();
+                        if (rt != null)
+                        {
+                            rt.anchorMin = new Vector2(0.5f, 0.5f);
+                            rt.anchorMax = new Vector2(0.5f, 0.5f);
+                            rt.anchoredPosition = Vector2.zero;
+                            rt.sizeDelta = new Vector2(100f, 100f);
+                        }
+                    }
+                    else
+                    {
+                        Undo.RecordObject(go.transform, "Reset local TRS");
+                        go.transform.localPosition = Vector3.zero;
+                        go.transform.localRotation = Quaternion.identity;
+                        go.transform.localScale = Vector3.one;
+                    }
                 }
 
                 Undo.CollapseUndoOperations(group);
@@ -195,12 +214,51 @@ namespace UnityMCP.Tools
 
             try
             {
-                Undo.AddComponent(go, type);
+                // Button / Toggle 等可交互 UI 组件需要 Image 才能有背景视觉
+                // 若对象上尚未有 Image，自动预添加一个
+                EnsureUiGraphicPrerequisite(go, type);
+
+                if (go.GetComponent(type) == null)
+                    Undo.AddComponent(go, type);
+
                 return SceneOperationResult.Ok(go);
             }
             catch (Exception ex)
             {
                 return SceneOperationResult.Fail($"添加组件失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 若目标组件类型是 Button / Toggle / Scrollbar / Slider 等需要 Image 的可交互 UI 组件，
+        /// 且当前对象上尚无任何 Graphic，则自动添加一个默认的 Image 组件（白色，可见）。
+        /// </summary>
+        private static void EnsureUiGraphicPrerequisite(GameObject go, Type componentType)
+        {
+            // 判断是否属于需要 targetGraphic 的可交互 UGUI 组件
+            var uiSelectableTypeName = "UnityEngine.UI.Selectable";
+            var selectableType = ComponentConfigurator.ResolveComponentTypeForTools(uiSelectableTypeName)
+                                 ?? ComponentConfigurator.ResolveComponentTypeForTools("Selectable");
+            if (selectableType == null) return;
+            if (!selectableType.IsAssignableFrom(componentType)) return;
+
+            // 检查是否已有 Graphic（Image / RawImage / Text 等）
+            var graphicTypeName = "UnityEngine.UI.Graphic";
+            var graphicType = ComponentConfigurator.ResolveComponentTypeForTools(graphicTypeName)
+                              ?? ComponentConfigurator.ResolveComponentTypeForTools("Graphic");
+            if (graphicType != null && go.GetComponent(graphicType) != null) return;
+
+            // 自动添加 Image
+            var imageType = ComponentConfigurator.ResolveComponentTypeForTools("Image");
+            if (imageType == null) return;
+
+            var img = Undo.AddComponent(go, imageType);
+            // 设置默认颜色为可见的中灰蓝色（比纯白更具视觉反馈）
+            if (img is UnityEngine.Behaviour b)
+            {
+                // 用反射设置 color，避免直接引用 UGUI 程序集
+                var colorProp = img.GetType().GetProperty("color", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                colorProp?.SetValue(img, new Color(0.22f, 0.48f, 0.80f, 1f));
             }
         }
 
@@ -459,7 +517,12 @@ namespace UnityMCP.Tools
 
             var rt = go.GetComponent<RectTransform>();
             if (rt == null)
-                return SceneOperationResult.Fail($"物体没有 RectTransform: \"{hierarchyPath}\"");
+            {
+                // 自动为 UI 物体补上 RectTransform（new GameObject() 在 Canvas 下不会自动添加）
+                rt = Undo.AddComponent<RectTransform>(go);
+                if (rt == null)
+                    return SceneOperationResult.Fail($"物体没有 RectTransform 且无法自动添加: \"{hierarchyPath}\"");
+            }
 
             Undo.RecordObject(rt, "Set RectTransform");
             if (anchorMin.HasValue) rt.anchorMin = anchorMin.Value;
