@@ -602,6 +602,10 @@ namespace UnityMCP.Tools
 
         private static Color? ParseColor(string raw)
         {
+            var v = raw.Trim();
+            if (v.Length > 0 && v[0] == '#' && ColorUtility.TryParseHtmlString(v, out var html))
+                return html;
+
             var p = raw.Split(',');
             if (p.Length >= 3 &&
                 float.TryParse(p[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var r) &&

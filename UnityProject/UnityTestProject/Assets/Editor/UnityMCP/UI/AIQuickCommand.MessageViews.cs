@@ -431,7 +431,7 @@ namespace UnityMCP.UI
                     continue;
                 }
 
-                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(norm) == null)
+                if (!AssetDeleteParser.AssetExistsForDelete(norm))
                 {
                     failed.Add($"{norm}（资源不存在或已删除）");
                     continue;

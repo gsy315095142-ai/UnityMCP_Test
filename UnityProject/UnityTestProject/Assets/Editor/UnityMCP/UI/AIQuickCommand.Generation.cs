@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -50,6 +51,40 @@ namespace UnityMCP.UI
             if (_config == null || _config.chatMemoryMaxTurns <= 0)
                 return Array.Empty<ChatMemoryTurn>();
             return ChatHistoryMemoryBuilder.BuildPriorTurns(_chatHistory, _config.chatMemoryMaxTurns, currentUserContent);
+        }
+
+        /// <summary>
+        /// 删除资源解析失败时，将用户句、AI 输出与多轮记忆合并，用于按类名匹配工程内 .cs 路径。
+        /// </summary>
+        private static string BuildAssetDeleteResolveHint(
+            string userContent,
+            string? aiResponse,
+            IReadOnlyList<ChatMemoryTurn>? memory)
+        {
+            const int maxTotal = 12000;
+            var sb = new StringBuilder();
+            sb.Append(userContent ?? "");
+            if (!string.IsNullOrEmpty(aiResponse))
+            {
+                sb.Append('\n');
+                sb.Append(aiResponse);
+            }
+
+            if (memory != null)
+            {
+                foreach (var t in memory)
+                {
+                    if (string.IsNullOrEmpty(t.Content))
+                        continue;
+                    sb.Append('\n');
+                    sb.Append(t.Content);
+                }
+            }
+
+            var s = sb.ToString();
+            if (s.Length > maxTotal)
+                return s.Substring(0, maxTotal) + "\n…（已截断）";
+            return s;
         }
 
         private void RetryTask(ChatMessage failedMsg)
@@ -623,24 +658,38 @@ namespace UnityMCP.UI
 
         private async void AssetDeleteAsync(ChatMessage context)
         {
-            if (_config == null)
-            {
-                context.ErrorMessage = "AI 服务未配置，请先打开设置窗口进行配置。";
-                context.Type = MessageTypeEnum.Error;
-                _isGenerating = false;
-                AddResultBubble(context);
-                return;
-            }
-
             try
             {
-                var service = AIServiceFactory.Create(_config);
                 var projContext = ProjectContext.Collect();
+                var memory = BuildChatMemory(context.Content);
+                var hintFull = BuildAssetDeleteResolveHint(context.Content, null, memory);
+
+                if (_config == null)
+                {
+                    var pluginOnly = AssetDeleteParser.ResolvePluginOnlyDeletePaths(projContext, hintFull);
+                    if (pluginOnly.Count == 0)
+                    {
+                        context.ErrorMessage =
+                            "未能从描述中解析出可删除的路径。请配置 AI 服务以便模型输出 assetDeleteIntent；或在本句中写明类名、文件名或完整 Assets/ 路径。";
+                        context.Type = MessageTypeEnum.Error;
+                        _isGenerating = false;
+                        AddResultBubble(context);
+                        return;
+                    }
+
+                    context.AssetDeletePaths = new List<string>(pluginOnly);
+                    context.Content = "以下资源将被删除（未配置 AI，已由插件根据原文与工程扫描解析路径；请确认）：";
+                    context.Type = MessageTypeEnum.AssetDeleteReady;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    return;
+                }
+
+                var service = AIServiceFactory.Create(_config);
                 var systemPrompt = PromptBuilder.BuildAssetDeleteSystemPrompt(projContext);
                 var userPrompt = PromptBuilder.BuildAssetDeleteUserPrompt(context.Content);
-                var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
-                LogAiExchange("删除预制体", response, $"memoryTurns={memory?.Count ?? 0}");
+                LogAiExchange("删除资源", response, $"memoryTurns={memory?.Count ?? 0}");
 
                 if (!response.Success)
                 {
@@ -651,10 +700,29 @@ namespace UnityMCP.UI
                     return;
                 }
 
-                var parse = AssetDeleteParser.Parse(response.Content ?? "");
-                if (!parse.Success)
+                var resolved = AssetDeleteParser.ParseAndResolveDeleteIntent(response.Content ?? "", projContext);
+                if (!resolved.Success)
                 {
-                    context.ErrorMessage = parse.Error ?? "无法解析删除列表";
+                    var hint = BuildAssetDeleteResolveHint(context.Content, response.Content, memory);
+                    var fallback = AssetDeleteParser.ResolveScriptPathsFromUserPrompt(projContext, hint);
+                    if (fallback.Count == 0)
+                        fallback = AssetDeleteParser.ResolveScriptPathsFromUserPrompt(projContext, context.Content ?? "");
+                    if (fallback.Count == 0)
+                        fallback = AssetDeleteParser.ResolveScriptPathsFromAllAssetsOnly(hint);
+                    if (fallback.Count > 0)
+                    {
+                        context.AssetDeletePaths = new List<string>(fallback);
+                        context.Content =
+                            "以下资源将根据原文/记忆与工程扫描匹配后删除（AI 输出未能解析为结构化意图时的兜底；请确认）：";
+                        context.GenerationTime = response.Duration;
+                        context.TokensUsed = response.TokensUsed;
+                        context.Type = MessageTypeEnum.AssetDeleteReady;
+                        _isGenerating = false;
+                        AddResultBubble(context);
+                        return;
+                    }
+
+                    context.ErrorMessage = resolved.Error ?? "无法解析删除意图";
                     context.Type = MessageTypeEnum.Error;
                     if (!string.IsNullOrEmpty(response.Content))
                         context.ErrorMessage += $"\n\nAI 原始输出:\n{response.Content}";
@@ -663,12 +731,15 @@ namespace UnityMCP.UI
                     return;
                 }
 
-                context.AssetDeletePaths = new List<string>(parse.NormalizedPaths);
-                context.RawJson = parse.RawJson;
-                var note = parse.Envelope?.note ?? "";
+                context.AssetDeletePaths = new List<string>(resolved.ResolvedPaths);
+                context.RawJson = resolved.RawJson;
+                var note = resolved.Note.Trim();
+                var sourceHint = resolved.UsedLegacyAssetPathsFormat
+                    ? "（旧版 assetPaths 已由插件校验）"
+                    : "（结构化意图已由插件解析为工程路径）";
                 context.Content = string.IsNullOrWhiteSpace(note)
-                    ? "以下资源将被删除（请确认）："
-                    : note.Trim();
+                    ? $"以下资源将被删除{sourceHint}，请确认："
+                    : $"{note}\n\n以下路径将删除{sourceHint}，请确认：";
                 context.GenerationTime = response.Duration;
                 context.TokensUsed = response.TokensUsed;
                 context.Type = MessageTypeEnum.AssetDeleteReady;
@@ -677,8 +748,8 @@ namespace UnityMCP.UI
             }
             catch (Exception ex)
             {
-                AiExchangeDebugLog.AppendException("删除预制体", ex);
-                context.ErrorMessage = $"删除预制体解析时出错: {ex.Message}";
+                AiExchangeDebugLog.AppendException("删除资源", ex);
+                context.ErrorMessage = $"删除资源解析时出错: {ex.Message}";
                 context.Type = MessageTypeEnum.Error;
                 _isGenerating = false;
                 AddResultBubble(context);

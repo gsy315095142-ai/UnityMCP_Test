@@ -28,6 +28,7 @@ namespace UnityMCP.AI
             return TryExtractBalancedJsonContainingKey(stripped, "unityOpsVersion")
                    ?? TryExtractBalancedJsonContainingKey(stripped, "assetOpsVersion")
                    ?? TryExtractBalancedJsonContainingKey(stripped, "operations")
+                   ?? TryExtractBalancedJsonContainingKey(stripped, "assetDeleteIntent")
                    ?? TryExtractBalancedJsonContainingKey(stripped, "assetPaths");
         }
 

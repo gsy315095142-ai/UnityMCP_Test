@@ -100,7 +100,8 @@ namespace UnityMCP.AI
                 "联合" or "两者" or "都要" or "代码和预制体" or "脚本和预制体" => GenerationRoute.Both,
                 "场景操控" or "场景操作" or "编辑场景" or "hierarchy操作" => GenerationRoute.SceneOps,
                 "项目查询" or "项目盘点" or "检查项目" or "只读查询" => GenerationRoute.ProjectQuery,
-                "删除预制体" or "删除资源" or "移除预制体" or "删掉预制体" => GenerationRoute.AssetDelete,
+                "删除预制体" or "删除资源" or "移除预制体" or "删掉预制体" or "删除脚本" or "删掉脚本" or "移除脚本" =>
+                    GenerationRoute.AssetDelete,
                 "整理资源" or "移动资源" or "复制资源" or "重命名资源" or "新建文件夹" => GenerationRoute.AssetOps,
                 _ => null
             };

@@ -695,7 +695,8 @@ namespace UnityMCP.UI
                 GenerateMode.Combined => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
                 GenerateMode.SceneOps => "描述在当前场景要做的事情，如：在根下建空物体 Door，加 BoxCollider；或把 Props/Crate 挂到选中物体下；或实例化 Assets/.../Enemy.prefab",
                 GenerateMode.ProjectQuery => "根据当前工程真实数据提问，如：项目里有哪些预制体、脚本大概有多少、用了哪些包",
-                GenerateMode.AssetDelete => "说明要删除的资源：路径或名称，例如：删掉 Assets/Prefabs/Generated/Old.prefab 或某张贴图",
+                GenerateMode.AssetDelete =>
+                    "说明要删除的资源：完整路径，或脚本写 类名.cs（如 ObjectColorChanger.cs），插件会先自动解析，无需 AI",
                 GenerateMode.AssetOps => "说明要如何整理 Assets：例如把某文件夹下材质移到 Archive、批量重命名、复制 prefab、新建 Assets/.../UI 文件夹",
                 _ => ""
             };
