@@ -16,18 +16,26 @@ namespace UnityMCP.AI
         public bool CombinedPrefabFirst { get; set; }
         public string? Error { get; set; }
         public string? RawJson { get; set; }
+        /// <summary>图片生成路由：主 AI 给出的英文图片描述（发给图片 AI）。</summary>
+        public string? ImagePrompt { get; set; }
+        /// <summary>图片生成路由：建议的保存文件名（不含扩展名）。</summary>
+        public string? SaveFileName { get; set; }
 
         public static GenerationIntentResult Ok(
             GenerationRoute route,
             CodeType codeType,
             string? rawJson,
-            bool combinedPrefabFirst = false) => new()
+            bool combinedPrefabFirst = false,
+            string? imagePrompt = null,
+            string? saveFileName = null) => new()
         {
             Success = true,
             Route = route,
             CodeType = codeType,
             CombinedPrefabFirst = combinedPrefabFirst,
-            RawJson = rawJson ?? ""
+            RawJson = rawJson ?? "",
+            ImagePrompt = imagePrompt,
+            SaveFileName = saveFileName,
         };
 
         public static GenerationIntentResult Fail(string error, string? rawJson = null) => new()

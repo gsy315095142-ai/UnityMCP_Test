@@ -27,6 +27,8 @@ namespace UnityMCP.UI
         private GenerateMode _currentMode = GenerateMode.AiJudge;
         private CodeType _currentCodeType = CodeType.Auto;
         private string _userInput = "";
+        /// <summary>用户已拖入但尚未发送的资源路径（发送后清空）。</summary>
+        private List<string> _pendingDroppedAssets = new();
 
         private List<ChatMessage> _chatHistory = new();
         private Vector2 _chatScrollPos;
@@ -63,6 +65,11 @@ namespace UnityMCP.UI
 
         /// <summary><see cref="AssetFolderLister"/> 缓存，工程变更时清空。</summary>
         private List<string>? _assetFoldersCache;
+
+        // ── 最小化（折叠）──
+        private bool _isMinimized;
+        /// <summary>折叠前保存的窗口尺寸，用于还原。</summary>
+        private Vector2 _normalSize;
 
         #endregion
 

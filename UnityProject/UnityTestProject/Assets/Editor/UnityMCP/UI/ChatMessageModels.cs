@@ -29,7 +29,8 @@ namespace UnityMCP.UI
         Error,               // 错误展示
         SceneOpsReady,       // 场景操控 JSON 已解析，等待用户执行
         AssetDeleteReady,    // 待删除资源路径已解析，等待用户确认
-        AssetOpsReady        // asset-ops JSON 已解析，等待用户执行
+        AssetOpsReady,       // asset-ops JSON 已解析，等待用户执行
+        TextureGenerated,    // 图片生成完毕，已保存到 Assets
     }
 
     /// <summary>
@@ -51,7 +52,9 @@ namespace UnityMCP.UI
         /// <summary>从 Project 删除资源（AI 输出路径 JSON，确认后执行）</summary>
         AssetDelete = 7,
         /// <summary>移动/复制/建文件夹等（asset-ops JSON）</summary>
-        AssetOps = 8
+        AssetOps = 8,
+        /// <summary>调用图片 AI 生成贴图/图标并保存到 Assets</summary>
+        TextureGenerate = 9,
     }
 
     /// <summary>
@@ -114,6 +117,20 @@ namespace UnityMCP.UI
         /// </summary>
         public List<string> SelectedAssetPaths = new();
 
+        // ── 拖入附件 ──
+        /// <summary>用户拖入聊天窗口的资源路径列表（Assets/ 开头或系统绝对路径）。</summary>
+        public List<string> DroppedAssets = new();
+
+        // ── 图片生成结果 ──
+        /// <summary>生成图片保存到 Assets 的路径（如 Assets/Textures/Generated/grass.png）</summary>
+        public string GeneratedTexturePath = "";
+        /// <summary>主 AI 给出的图片 prompt（英文优化版），供图片 AI 使用</summary>
+        public string ImagePrompt = "";
+        /// <summary>建议的保存文件名（不含扩展名）</summary>
+        public string ImageSaveFileName = "";
+        /// <summary>DALL-E 等模型返回的 revised_prompt（对 prompt 的实际修订）</summary>
+        public string ImageRevisedPrompt = "";
+
         /// <summary>资源整理：解析成功的 envelope。</summary>
         public AssetOpsEnvelopeDto? AssetOpsEnvelope;
         public int AssetOpsExecutedStepCount;
@@ -160,7 +177,12 @@ namespace UnityMCP.UI
                 CompileWaitCancelled = a.CompileWaitCancelled,
                 CombinedPrefabFirst = a.CombinedPrefabFirst,
                 AssetDeletePaths = new List<string>(a.AssetDeletePaths),
-                SelectedAssetPaths = new List<string>(a.SelectedAssetPaths),
+                SelectedAssetPaths    = new List<string>(a.SelectedAssetPaths),
+                DroppedAssets         = new List<string>(a.DroppedAssets),
+                GeneratedTexturePath  = a.GeneratedTexturePath,
+                ImagePrompt           = a.ImagePrompt,
+                ImageSaveFileName     = a.ImageSaveFileName,
+                ImageRevisedPrompt    = a.ImageRevisedPrompt,
                 AssetOpsEnvelope = a.AssetOpsEnvelope,
                 AssetOpsExecutedStepCount = a.AssetOpsExecutedStepCount,
                 InlineActionsClicked = a.InlineActionsClicked ?? ""

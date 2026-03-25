@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using UnityEditor;
@@ -20,17 +21,23 @@ namespace UnityMCP.UI
 
         private void StartNewTask()
         {
-            if (string.IsNullOrWhiteSpace(_userInput)) return;
+            if (string.IsNullOrWhiteSpace(_userInput) && _pendingDroppedAssets.Count == 0) return;
 
             var userText = _userInput;
             _userInput = "";
-            GUI.FocusControl(null); 
+            GUI.FocusControl(null);
 
             // 在修改焦点/开始异步之前立即捕获编辑器选中状态
             var selectionSnapshot = SnapshotEditorSelection();
 
-            // 用户输入气泡
-            _chatHistory.Add(ChatMessage.CreateText(ChatRole.User, userText));
+            // 取出拖入附件并清空待发列表
+            var droppedAssets = new List<string>(_pendingDroppedAssets);
+            _pendingDroppedAssets.Clear();
+
+            // 用户输入气泡（附带拖入资产信息）
+            var userMsg = ChatMessage.CreateText(ChatRole.User, userText);
+            userMsg.DroppedAssets = droppedAssets;
+            _chatHistory.Add(userMsg);
             PersistChatHistory();
             ScrollToBottom();
 
@@ -38,10 +45,11 @@ namespace UnityMCP.UI
             var contextMsg = new ChatMessage
             {
                 Role = ChatRole.Assistant,
-                Content = userText, // 保存初始输入用于重试或传给下一步
+                Content = userText,
                 Mode = _currentMode,
                 CodeType = _currentCodeType,
-                SelectedAssetPaths = selectionSnapshot
+                SelectedAssetPaths = selectionSnapshot,
+                DroppedAssets = droppedAssets,
             };
 
             ExecuteTaskPhase(contextMsg);
@@ -179,6 +187,10 @@ namespace UnityMCP.UI
                     AddTextBubble("⏳ 正在生成资源整理步骤，请稍候...");
                     GenerateAssetOpsAsync(context);
                     break;
+                case GenerateMode.TextureGenerate:
+                    AddTextBubble("⏳ 正在调用图片 AI 生成贴图，请稍候...");
+                    TextureGenerateAsync(context);
+                    break;
             }
             ScrollToBottom();
         }
@@ -218,6 +230,7 @@ namespace UnityMCP.UI
             GenerationRoute.ProjectQuery => GenerateMode.ProjectQuery,
             GenerationRoute.AssetDelete => GenerateMode.AssetDelete,
             GenerationRoute.AssetOps => GenerateMode.AssetOps,
+            GenerationRoute.TextureGenerate => GenerateMode.TextureGenerate,
             _ => GenerateMode.Code
         };
 
@@ -231,6 +244,7 @@ namespace UnityMCP.UI
             GenerateMode.ProjectQuery => "项目查询（盘点预制体等）",
             GenerateMode.AssetDelete => "删除 Project 资源",
             GenerateMode.AssetOps => "整理资源（asset-ops）",
+            GenerateMode.TextureGenerate => "生成贴图（图片 AI）",
             _ => mode.ToString()
         };
 
@@ -253,7 +267,8 @@ namespace UnityMCP.UI
                 var service = AIServiceFactory.Create(_config);
                 var projContext = ProjectContext.Collect();
                 var systemPrompt = PromptBuilder.BuildIntentRouteSystemPrompt(projContext);
-                var userPrompt = PromptBuilder.BuildIntentRouteUserPrompt(context.Content);
+                var userPrompt = PromptBuilder.BuildIntentRouteUserPrompt(context.Content)
+                               + PromptBuilder.BuildDroppedAssetsContext(context.DroppedAssets);
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
                 LogAiExchange("意图路由", response, $"memoryTurns={memory?.Count ?? 0}");
@@ -283,6 +298,12 @@ namespace UnityMCP.UI
                 context.Mode = resolvedMode;
                 context.CombinedPrefabFirst = intent.CombinedPrefabFirst;
                 context.CodeType = intent.CodeType;
+                // 图片生成：将主 AI 给出的 imagePrompt / saveFileName 写入 context
+                if (resolvedMode == GenerateMode.TextureGenerate)
+                {
+                    context.ImagePrompt       = intent.ImagePrompt    ?? "";
+                    context.ImageSaveFileName = intent.SaveFileName   ?? "";
+                }
 
                 _chatHistory.RemoveAll(m => m.Role == ChatRole.Assistant && m.Type == MessageTypeEnum.Text && m.Content.StartsWith("⏳"));
 
@@ -330,6 +351,10 @@ namespace UnityMCP.UI
                         AddTextBubble("⏳ 正在生成资源整理步骤，请稍候...");
                         GenerateAssetOpsAsync(context);
                         break;
+                    case GenerateMode.TextureGenerate:
+                        AddTextBubble("⏳ 正在调用图片 AI 生成贴图，请稍候...");
+                        TextureGenerateAsync(context);
+                        break;
                     default:
                         context.ErrorMessage = $"内部错误：未知解析模式 {resolvedMode}";
                         context.Type = MessageTypeEnum.Error;
@@ -369,7 +394,8 @@ namespace UnityMCP.UI
                 var projContext = ProjectContext.Collect();
 
                 var systemPrompt = PromptBuilder.BuildCodeSystemPrompt(projContext, context.CodeType);
-                var userPrompt = PromptBuilder.BuildCodeUserPrompt(context.Content);
+                var userPrompt = PromptBuilder.BuildCodeUserPrompt(context.Content)
+                               + PromptBuilder.BuildDroppedAssetsContext(context.DroppedAssets);
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
                 LogAiExchange("生成代码", response, $"CodeType={context.CodeType}, memoryTurns={memory?.Count ?? 0}");
@@ -449,9 +475,10 @@ namespace UnityMCP.UI
                 var projContext = ProjectContext.Collect();
 
                 string systemPrompt = PromptBuilder.BuildPrefabSystemPrompt(projContext);
-                string userPrompt = context.Mode == GenerateMode.Combined
+                string userPrompt = (context.Mode == GenerateMode.Combined
                     ? PromptBuilder.BuildCombinedPrefabUserPrompt(context.Content, context.ScriptName)
-                    : PromptBuilder.BuildPrefabUserPrompt(context.Content);
+                    : PromptBuilder.BuildPrefabUserPrompt(context.Content))
+                    + PromptBuilder.BuildDroppedAssetsContext(context.DroppedAssets);
 
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
@@ -526,7 +553,8 @@ namespace UnityMCP.UI
                 var userPrompt = PromptBuilder.BuildSceneOpsUserPrompt(
                     context.Content,
                     PromptBuilder.GetActiveSceneNameForPrompt(),
-                    appendProjectBrief: false);
+                    appendProjectBrief: false)
+                    + PromptBuilder.BuildDroppedAssetsContext(context.DroppedAssets);
 
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
@@ -591,7 +619,8 @@ namespace UnityMCP.UI
                 var service = AIServiceFactory.Create(_config);
                 var projContext = ProjectContext.Collect();
                 var systemPrompt = PromptBuilder.BuildAssetOpsSystemPrompt(projContext);
-                var userPrompt = PromptBuilder.BuildAssetOpsUserPrompt(context.Content);
+                var userPrompt = PromptBuilder.BuildAssetOpsUserPrompt(context.Content)
+                               + PromptBuilder.BuildDroppedAssetsContext(context.DroppedAssets);
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
                 LogAiExchange("资源整理 JSON", response, $"memoryTurns={memory?.Count ?? 0}");
@@ -656,7 +685,8 @@ namespace UnityMCP.UI
                 var service = AIServiceFactory.Create(_config);
                 var projContext = ProjectContext.Collect();
                 var systemPrompt = PromptBuilder.BuildProjectQuerySystemPrompt(projContext);
-                var userPrompt = context.Content;
+                var userPrompt = context.Content
+                               + PromptBuilder.BuildDroppedAssetsContext(context.DroppedAssets);
                 var memory = BuildChatMemory(context.Content);
                 var response = await AIRequestRetry.SendWithRetryAsync(service, _config, systemPrompt, userPrompt, memory);
                 LogAiExchange("项目查询", response, $"memoryTurns={memory?.Count ?? 0}");
@@ -971,6 +1001,128 @@ namespace UnityMCP.UI
                 SavedScriptPath = source.SavedScriptPath
             };
             AddResultBubble(m, removeWaitingTextBubbles: false);
+        }
+
+        private async void TextureGenerateAsync(ChatMessage context)
+        {
+            var imgCfg = ImageAIConfig.Load();
+            if (!imgCfg.IsConfigured)
+            {
+                context.ErrorMessage =
+                    "图片 AI 未配置。请在「AI 助手 - 设置」中的「图片 AI」分区填入服务商和 API Key，再重试。";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+                Repaint();
+                return;
+            }
+
+            try
+            {
+                // 优先用主 AI 给出的 imagePrompt；若为空则直接用用户原文
+                var prompt = string.IsNullOrWhiteSpace(context.ImagePrompt)
+                    ? context.Content
+                    : context.ImagePrompt;
+
+                var service = ImageAIServiceFactory.Create(imgCfg);
+                var response = await service.GenerateImageAsync(prompt, imgCfg);
+
+                if (!response.Success || response.ImageBytes == null || response.ImageBytes.Length == 0)
+                {
+                    context.ErrorMessage = $"图片生成失败：{response.Error ?? "未知错误"}";
+                    context.Type = MessageTypeEnum.Error;
+                    _isGenerating = false;
+                    AddResultBubble(context);
+                    Repaint();
+                    return;
+                }
+
+                // 确定保存路径
+                var folder = string.IsNullOrWhiteSpace(imgCfg.saveFolder)
+                    ? "Assets/Textures/Generated"
+                    : imgCfg.saveFolder.TrimEnd('/');
+
+                var rawName = string.IsNullOrWhiteSpace(context.ImageSaveFileName)
+                    ? "generated_texture"
+                    : SanitizeFileName(context.ImageSaveFileName);
+
+                // 如果文件名已存在则追加序号
+                var assetPath = $"{folder}/{rawName}.png";
+                assetPath = MakeUniqueAssetPath(folder, rawName, ".png");
+
+                // 写入磁盘
+                var absFolder = Path.GetFullPath(folder.Replace("Assets", "Assets"));
+                var projectRoot = Directory.GetParent(Application.dataPath)?.FullName ?? "";
+                var absPath = Path.Combine(projectRoot, assetPath.Replace('/', Path.DirectorySeparatorChar));
+                var absDir  = Path.GetDirectoryName(absPath)!;
+                if (!Directory.Exists(absDir))
+                    Directory.CreateDirectory(absDir);
+
+                File.WriteAllBytes(absPath, response.ImageBytes);
+
+                // 导入并配置 TextureImporter
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+                if (AssetImporter.GetAtPath(assetPath) is TextureImporter importer)
+                {
+                    importer.textureType      = TextureImporterType.Default;
+                    importer.maxTextureSize   = 2048;
+                    importer.textureCompression = TextureImporterCompression.Compressed;
+                    importer.SaveAndReimport();
+                }
+
+                context.GeneratedTexturePath  = assetPath;
+                context.ImageRevisedPrompt    = response.RevisedPrompt ?? "";
+                context.GenerationTime        = response.Duration;
+                context.Type                  = MessageTypeEnum.TextureGenerated;
+                context.Content               = $"图片已生成并保存到：{assetPath}";
+                _isGenerating = false;
+                var snap = ChatMessage.CloneSnapshot(context);
+                AddResultBubble(snap);
+                _pendingMessage = null;
+            }
+            catch (Exception ex)
+            {
+                AiExchangeDebugLog.AppendException("图片生成", ex);
+                context.ErrorMessage = $"图片生成时出错: {ex.Message}";
+                context.Type = MessageTypeEnum.Error;
+                _isGenerating = false;
+                AddResultBubble(context);
+            }
+            finally
+            {
+                Repaint();
+            }
+        }
+
+        private static string SanitizeFileName(string name)
+        {
+            var invalid = Path.GetInvalidFileNameChars();
+            var sb = new StringBuilder(name.Length);
+            foreach (var c in name)
+                sb.Append(Array.IndexOf(invalid, c) >= 0 ? '_' : c);
+            var s = sb.ToString().Trim('.', ' ', '_');
+            return string.IsNullOrEmpty(s) ? "generated_texture" : s;
+        }
+
+        private static string MakeUniqueAssetPath(string folder, string baseName, string ext)
+        {
+            var candidate = $"{folder}/{baseName}{ext}";
+            if (!File.Exists(
+                    Path.Combine(
+                        Directory.GetParent(Application.dataPath)?.FullName ?? "",
+                        candidate.Replace('/', Path.DirectorySeparatorChar))))
+                return candidate;
+
+            for (var i = 1; i <= 999; i++)
+            {
+                var next = $"{folder}/{baseName}_{i}{ext}";
+                if (!File.Exists(
+                        Path.Combine(
+                            Directory.GetParent(Application.dataPath)?.FullName ?? "",
+                            next.Replace('/', Path.DirectorySeparatorChar))))
+                    return next;
+            }
+            return $"{folder}/{baseName}_{Guid.NewGuid():N}{ext}";
         }
 
         private void RunSceneOpsBatchDirect(ChatMessage msg)

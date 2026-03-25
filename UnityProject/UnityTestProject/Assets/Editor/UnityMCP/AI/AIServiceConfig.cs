@@ -38,24 +38,24 @@ namespace UnityMCP.AI
         [Tooltip("API 端点地址")]
         public string customEndpoint = "http://192.168.0.34:11434";
 
-        [Tooltip("生成创造性参数 (0-1)")]
+        [Tooltip("生成创造性参数 (0-1)，固定为最大值 1")]
         [Range(0f, 1f)]
-        public float temperature = 0.7f;
+        public float temperature = 1f;
 
-        [Tooltip("最大生成 Token 数")]
-        public int maxTokens = 4000;
+        [Tooltip("最大生成 Token 数，固定为最大值")]
+        public int maxTokens = 16384;
 
-        [Tooltip("请求失败时额外重试次数（不含首次）。可用于网络抖动或 Ollama 短暂无响应。")]
+        [Tooltip("请求失败时额外重试次数（暂不启用）")]
         [Range(0, 6)]
-        public int requestRetries = 2;
+        public int requestRetries = 0;
 
-        [Tooltip("重试等待基数（秒），第 n 次重试约等待 n×该值。")]
+        [Tooltip("重试等待基数（秒）")]
         [Range(0.2f, 10f)]
         public float requestRetryDelaySeconds = 1.25f;
 
-        [Tooltip("聊天记忆：发往模型的「用户+助手」轮数上限（最新几轮）；超出则丢弃最早一轮。0 表示关闭多轮记忆。")]
+        [Tooltip("聊天记忆：发往模型的「用户+助手」轮数上限，固定为最大值")]
         [Range(0, 32)]
-        public int chatMemoryMaxTurns = 6;
+        public int chatMemoryMaxTurns = 32;
 
         private const string PREFS_KEY = "UnityMCP_AIServiceConfig";
         private const string API_KEY_PREFS_KEY = "UnityMCP_APIKey_Encrypted";
@@ -209,11 +209,11 @@ namespace UnityMCP.AI
             apiKey = "";
             modelName = "qwen3.5:35b";
             customEndpoint = "http://192.168.0.34:11434";
-            temperature = 0.7f;
-            maxTokens = 4000;
-            requestRetries = 2;
+            temperature = 1f;
+            maxTokens = 16384;
+            requestRetries = 0;
             requestRetryDelaySeconds = 1.25f;
-            chatMemoryMaxTurns = 6;
+            chatMemoryMaxTurns = 32;
         }
     }
 }

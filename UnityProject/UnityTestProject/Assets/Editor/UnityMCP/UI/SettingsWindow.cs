@@ -13,10 +13,13 @@ namespace UnityMCP.UI
     /// </summary>
     public class SettingsWindow : EditorWindow
     {
-        private AIServiceConfig _config = new();
-        private string _testResult = "";
+        private AIServiceConfig   _config    = new();
+        private ImageAIConfig     _imgConfig = new();
+        private string _testResult  = "";
+        private string _imgTestResult = "";
         private bool _isTesting;
         private bool _showApiKey;
+        private bool _showImgApiKey;
 
         private static readonly string[] PROVIDER_NAMES =
         {
@@ -25,6 +28,14 @@ namespace UnityMCP.UI
             "Claude",
             "Azure OpenAI",
             "月之暗面（Moonshot / Kimi）"
+        };
+
+        private static readonly string[] IMG_PROVIDER_NAMES =
+        {
+            "禁用（不使用图片 AI）",
+            "OpenAI DALL-E",
+            "Stability AI",
+            "Pollinations.ai（免费，无需 Key）",
         };
 
         [MenuItem("Window/AI 助手/设置 %#,", priority = 100)]
@@ -38,7 +49,8 @@ namespace UnityMCP.UI
 
         private void OnEnable()
         {
-            _config = AIServiceConfig.Load();
+            _config    = AIServiceConfig.Load();
+            _imgConfig = ImageAIConfig.Load();
         }
 
         private void OnGUI()
@@ -54,11 +66,13 @@ namespace UnityMCP.UI
             EditorGUILayout.Space(10);
             DrawModelSection();
             EditorGUILayout.Space(10);
-            DrawParameterSection();
             EditorGUILayout.Space(20);
             DrawActionButtons();
             EditorGUILayout.Space(10);
             DrawTestResult();
+
+            EditorGUILayout.Space(20);
+            DrawImageAISection();
 
             EditorGUILayout.EndScrollView();
         }
@@ -160,49 +174,6 @@ namespace UnityMCP.UI
             }
         }
 
-        private void DrawParameterSection()
-        {
-            EditorGUILayout.LabelField("生成参数", EditorStyles.boldLabel);
-            using (new EditorGUI.IndentLevelScope())
-            {
-                _config.temperature = EditorGUILayout.Slider(
-                    "Temperature", _config.temperature, 0f, 1f);
-                if (_config.provider == AIProvider.Moonshot &&
-                    MoonshotOpenAiService.ModelLocksTemperatureToOne(_config.GetEffectiveModel()))
-                {
-                    EditorGUILayout.HelpBox(
-                        "当前 Moonshot 模型为 Kimi K2.5：接口要求 temperature 必须为 1，请求时会自动使用 1（与滑块无关）。",
-                        MessageType.Info);
-                }
-                else
-                {
-                    EditorGUILayout.HelpBox(
-                        "越低越确定性（适合代码生成），越高越有创造性",
-                        MessageType.None);
-                }
-
-                _config.maxTokens = EditorGUILayout.IntSlider(
-                    "最大 Token 数", _config.maxTokens, 512, 16384);
-
-                _config.chatMemoryMaxTurns = EditorGUILayout.IntSlider(
-                    new GUIContent(
-                        "聊天记忆轮数",
-                        "每次请求附带最近几轮「用户+助手」摘要；超出则从最早一轮丢弃。0 关闭。"),
-                    _config.chatMemoryMaxTurns,
-                    0,
-                    32);
-
-                EditorGUILayout.Space(6);
-                EditorGUILayout.LabelField("稳定性（Phase 2-B）", EditorStyles.boldLabel);
-                _config.requestRetries = EditorGUILayout.IntSlider(
-                    "失败自动重试次数", _config.requestRetries, 0, 6);
-                EditorGUILayout.HelpBox(
-                    "不含首次请求。仅对超时、连接失败、5xx、429 等瞬时错误重试。",
-                    MessageType.None);
-                _config.requestRetryDelaySeconds = EditorGUILayout.Slider(
-                    "重试间隔基数（秒）", _config.requestRetryDelaySeconds, 0.25f, 6f);
-            }
-        }
 
         private void DrawActionButtons()
         {
@@ -253,6 +224,120 @@ namespace UnityMCP.UI
             else
             {
                 EditorGUILayout.HelpBox(_testResult, MessageType.None);
+            }
+        }
+
+        private void DrawImageAISection()
+        {
+            EditorGUILayout.LabelField("─── 图片 AI（可选）", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "图片 AI 用于「生成贴图 / 图标」功能。所有服务商均需填写 API Key。\n" +
+                "• Pollinations.ai：免费注册 enter.pollinations.ai 即可获取 Key（sk_ 开头）。\n" +
+                "• DALL-E：需要 OpenAI 账号。  • Stability AI：需要 Stability AI 账号。",
+                MessageType.None);
+
+            using (new EditorGUI.IndentLevelScope())
+            {
+                // 服务商选择
+                var newProv = (ImageAIProvider)EditorGUILayout.Popup(
+                    "图片 AI 服务商", (int)_imgConfig.provider, IMG_PROVIDER_NAMES);
+                if (newProv != _imgConfig.provider)
+                {
+                    _imgConfig.ApplyProviderDefaults(newProv);
+                    _imgTestResult = "";
+                }
+
+                if (_imgConfig.provider != ImageAIProvider.None)
+                {
+                    // Pollinations 特别说明
+                    if (_imgConfig.provider == ImageAIProvider.Pollinations)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Pollinations.ai 现需注册账号并填入 API Key 才可调用。\n" +
+                            "免费注册地址：https://enter.pollinations.ai\n" +
+                            "注册后在控制台创建 Secret Key（sk_ 开头），填入下方即可。\n\n" +
+                            "当前有效图片模型（填模型名称栏）：\n" +
+                            "  flux（推荐）、kontext、gpt-image、gpt-image-large\n" +
+                            "  seedream、seedream-pro、z-image、z-image-turbo\n" +
+                            "  grok-imagine、grok-aurora、aurora、pruna",
+                            MessageType.Warning);
+                    }
+
+                    var keyLabel = _imgConfig.provider == ImageAIProvider.Pollinations
+                        ? "API Key（sk_ 开头）"
+                        : "API Key";
+                    EditorGUILayout.BeginHorizontal();
+                    if (_showImgApiKey)
+                        _imgConfig.apiKey = EditorGUILayout.TextField(keyLabel, _imgConfig.apiKey);
+                    else
+                        _imgConfig.apiKey = EditorGUILayout.PasswordField(keyLabel, _imgConfig.apiKey);
+                    if (GUILayout.Button(_showImgApiKey ? "隐藏" : "显示", GUILayout.Width(50)))
+                        _showImgApiKey = !_showImgApiKey;
+                    EditorGUILayout.EndHorizontal();
+
+                    // 模型名
+                    var modelTooltip = _imgConfig.provider switch
+                    {
+                        ImageAIProvider.Pollinations => "flux（推荐）/ kontext / gpt-image / gpt-image-large / seedream / z-image / z-image-turbo / aurora 等（注意：turbo 已无效）",
+                        ImageAIProvider.DallE        => "dall-e-3 / dall-e-2",
+                        _                            => "stable-diffusion-3-5-large 等"
+                    };
+                    _imgConfig.modelName = EditorGUILayout.TextField(
+                        new GUIContent("模型名称", modelTooltip), _imgConfig.modelName);
+
+                    // 图片参数
+                    _imgConfig.imageSize = EditorGUILayout.TextField(
+                        new GUIContent("图片尺寸", "格式：宽x高，如 1024x1024 / 1280x720"),
+                        _imgConfig.imageSize);
+
+                    if (_imgConfig.provider == ImageAIProvider.DallE)
+                    {
+                        _imgConfig.imageQuality = EditorGUILayout.TextField(
+                            new GUIContent("图片质量", "standard / hd"), _imgConfig.imageQuality);
+                        _imgConfig.imageStyle = EditorGUILayout.TextField(
+                            new GUIContent("图片风格", "vivid（生动）/ natural（自然写实）"), _imgConfig.imageStyle);
+                    }
+
+                    // 保存目录
+                    EditorGUILayout.BeginHorizontal();
+                    _imgConfig.saveFolder = EditorGUILayout.TextField(
+                        new GUIContent("保存目录", "相对工程根，以 Assets/ 开头"),
+                        _imgConfig.saveFolder);
+                    if (GUILayout.Button("浏览", GUILayout.Width(50)))
+                    {
+                        var picked = EditorUtility.OpenFolderPanel(
+                            "选择图片保存目录",
+                            _imgConfig.saveFolder.Replace("Assets", Application.dataPath),
+                            "");
+                        if (!string.IsNullOrEmpty(picked) && picked.Contains(Application.dataPath))
+                        {
+                            _imgConfig.saveFolder = "Assets" + picked.Substring(Application.dataPath.Length).Replace('\\', '/');
+                        }
+                    }
+                    EditorGUILayout.EndHorizontal();
+                }
+
+                EditorGUILayout.Space(6);
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("保存图片 AI 配置", GUILayout.Height(28)))
+                {
+                    _imgConfig.Save();
+                    _imgTestResult = "✅ 图片 AI 配置已保存";
+                    ShowNotification(new GUIContent("图片 AI 配置已保存"));
+                }
+                if (GUILayout.Button("重置", GUILayout.Width(60), GUILayout.Height(28)))
+                {
+                    _imgConfig.ResetToDefault();
+                    _imgTestResult = "";
+                }
+                EditorGUILayout.EndHorizontal();
+
+                if (!string.IsNullOrEmpty(_imgTestResult))
+                {
+                    var mtype = _imgTestResult.StartsWith("✅") ? MessageType.Info :
+                                _imgTestResult.StartsWith("❌") ? MessageType.Error : MessageType.None;
+                    EditorGUILayout.HelpBox(_imgTestResult, mtype);
+                }
             }
         }
 

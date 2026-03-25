@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Text.RegularExpressions;
@@ -15,6 +15,10 @@ namespace UnityMCP.AI
             public string? codeType;
             /// <summary>联合生成时步骤顺序：prefabFirst / codeFirst（可省略，默认 codeFirst）。</summary>
             public string? combinedOrder;
+            /// <summary>图片生成：英文图片描述（发给图片 AI）。</summary>
+            public string? imagePrompt;
+            /// <summary>图片生成：建议保存文件名（不含扩展名）。</summary>
+            public string? saveFileName;
         }
 
         /// <summary>
@@ -63,7 +67,9 @@ namespace UnityMCP.AI
 
             var codeType = MapCodeTypeHint(parsed.codeType);
             var prefabFirst = route == GenerationRoute.Both && MapCombinedOrderIsPrefabFirst(parsed.combinedOrder);
-            return GenerationIntentResult.Ok(route.Value, codeType, jsonText, prefabFirst);
+            return GenerationIntentResult.Ok(route.Value, codeType, jsonText, prefabFirst,
+                imagePrompt: parsed.imagePrompt,
+                saveFileName: parsed.saveFileName);
         }
 
         private static bool MapCombinedOrderIsPrefabFirst(string? raw)
@@ -103,6 +109,8 @@ namespace UnityMCP.AI
                 "删除预制体" or "删除资源" or "移除预制体" or "删掉预制体" or "删除脚本" or "删掉脚本" or "移除脚本" =>
                     GenerationRoute.AssetDelete,
                 "整理资源" or "移动资源" or "复制资源" or "重命名资源" or "新建文件夹" => GenerationRoute.AssetOps,
+                "generatetexture" or "generateimage" or "imagegen" or "texturegen" => GenerationRoute.TextureGenerate,
+                "生成贴图" or "生成图片" or "生成纹理" or "生成图标" or "生成图像" => GenerationRoute.TextureGenerate,
                 _ => null
             };
         }
@@ -155,6 +163,8 @@ namespace UnityMCP.AI
             s = Regex.Replace(s, @"(?i)""generationtarget""\s*:", "\"generationTarget\":");
             s = Regex.Replace(s, @"(?i)""codetype""\s*:", "\"codeType\":");
             s = Regex.Replace(s, @"(?i)""combinedorder""\s*:", "\"combinedOrder\":");
+            s = Regex.Replace(s, @"(?i)""imageprompt""\s*:", "\"imagePrompt\":");
+            s = Regex.Replace(s, @"(?i)""savefilename""\s*:", "\"saveFileName\":");
             for (var i = 0; i < 6; i++)
             {
                 var n = Regex.Replace(s, @",(\s*[\]}])", "$1");

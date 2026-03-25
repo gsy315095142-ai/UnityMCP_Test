@@ -687,6 +687,62 @@ namespace UnityMCP.UI
             EditorGUILayout.EndHorizontal();
         }
 
+        private void DrawTextureGeneratedState(ChatMessage msg)
+        {
+            var tw = AssistantBubbleTextWidth();
+            DrawSelectableLabel("🖼️ <b>图片已生成</b>", _assistantBubbleStyle!, tw);
+
+            if (!string.IsNullOrEmpty(msg.GeneratedTexturePath))
+                DrawSelectableLabel($"保存路径：{msg.GeneratedTexturePath}", EditorStyles.miniLabel, tw);
+
+            // 主 AI 给出的 imagePrompt
+            if (!string.IsNullOrEmpty(msg.ImagePrompt))
+            {
+                EditorGUILayout.Space(2);
+                DrawSelectableLabel("图片描述（英文）：", EditorStyles.boldLabel, tw);
+                DrawSelectableLabel(msg.ImagePrompt, EditorStyles.wordWrappedMiniLabel, tw);
+            }
+
+            // 图片 AI 修订后的 prompt（DALL-E 3 会返回）
+            if (!string.IsNullOrEmpty(msg.ImageRevisedPrompt))
+            {
+                EditorGUILayout.Space(2);
+                DrawSelectableLabel("图片 AI 修订描述：", EditorStyles.boldLabel, tw);
+                DrawSelectableLabel(msg.ImageRevisedPrompt, EditorStyles.wordWrappedMiniLabel, tw);
+            }
+
+            // 缩略图预览
+            if (!string.IsNullOrEmpty(msg.GeneratedTexturePath))
+            {
+                var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(msg.GeneratedTexturePath);
+                if (tex != null)
+                {
+                    EditorGUILayout.Space(6);
+                    var previewSize = Mathf.Min(tw, 200f);
+                    var rect = GUILayoutUtility.GetRect(previewSize, previewSize, GUILayout.ExpandWidth(false));
+                    GUI.DrawTexture(rect, tex, ScaleMode.ScaleToFit);
+                }
+            }
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.BeginHorizontal();
+
+            if (!string.IsNullOrEmpty(msg.GeneratedTexturePath))
+            {
+                if (GUILayout.Button("在 Project 中定位", GUILayout.Height(25)))
+                {
+                    var asset = AssetDatabase.LoadAssetAtPath<Texture2D>(msg.GeneratedTexturePath);
+                    if (asset != null)
+                    {
+                        Selection.activeObject = asset;
+                        EditorGUIUtility.PingObject(asset);
+                    }
+                }
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
         private void DrawErrorState(ChatMessage msg)
         {
             var tw = AssistantBubbleTextWidth();

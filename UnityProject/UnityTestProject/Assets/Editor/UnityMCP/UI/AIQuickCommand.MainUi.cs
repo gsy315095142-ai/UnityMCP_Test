@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -177,28 +178,59 @@ namespace UnityMCP.UI
         private void OnGUI()
         {
             InitStyles();
-            // 根纵向占满窗口高度，再横向分栏，右侧日志才能与左列同高、通顶通底。
             EditorGUILayout.BeginVertical(GUILayout.ExpandHeight(true));
-            // 整窗横向：左列工具栏/工作区/聊天/输入；右列 API 日志通顶通底（与左列同高）。
             EditorGUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
             EditorGUILayout.BeginVertical(GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
             DrawToolbar();
-            // 须在工具栏之后：切换「API 日志」会改窗口宽度与 _showAiDebugPanel，再算聊天列宽才一致。
-            ApplyChatColumnWidthForCurrentLayout();
-            EditorGUILayout.Space(5);
-            DrawWorkspaceScopePanel();
-            EditorGUILayout.Space(5);
-            DrawChatHistory();
-            EditorGUILayout.Space(5);
-            DrawInputArea();
+            if (!_isMinimized)
+            {
+                // 须在工具栏之后：切换「API 日志」会改窗口宽度与 _showAiDebugPanel，再算聊天列宽才一致。
+                ApplyChatColumnWidthForCurrentLayout();
+                EditorGUILayout.Space(5);
+                DrawWorkspaceScopePanel();
+                EditorGUILayout.Space(5);
+                DrawChatHistory();
+                EditorGUILayout.Space(5);
+                DrawInputArea();
+            }
             EditorGUILayout.EndVertical();
-            if (_showAiDebugPanel)
+            if (!_isMinimized && _showAiDebugPanel)
             {
                 DrawChatDebugColumnSeparator();
                 DrawAiDebugSidePanel();
             }
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.EndVertical();
+        }
+
+        private const float MinimizedHeight = 26f;
+
+        private void ToggleMinimized()
+        {
+            var r = position;
+            if (_isMinimized)
+            {
+                // 还原
+                _isMinimized = false;
+                minSize = new Vector2(600f, 500f);
+                maxSize = new Vector2(4000f, 4000f);
+                r.size = _normalSize.sqrMagnitude > 0.1f
+                    ? _normalSize
+                    : new Vector2(Mathf.Max(600f, r.width), 600f);
+                position = r;
+            }
+            else
+            {
+                // 折叠
+                _normalSize = r.size;
+                _isMinimized = true;
+                // 必须先改 min/maxSize 再设 position，否则 Unity 会把高度 clamp 回 minSize
+                minSize = new Vector2(300f, MinimizedHeight);
+                maxSize = new Vector2(4000f, MinimizedHeight);
+                r.height = MinimizedHeight;
+                position = r;
+            }
+            Repaint();
         }
 
         private const float DebugPanelContentWidth = 276f;
@@ -304,18 +336,25 @@ namespace UnityMCP.UI
 
             GUILayout.FlexibleSpace();
 
-            var debugToggle = GUILayout.Toggle(
-                _showAiDebugPanel,
-                new GUIContent("API 日志", "在窗口右侧通顶通底一列；窗口会加宽，聊天区域宽度保持不变"),
-                EditorStyles.toolbarButton,
-                GUILayout.Width(72));
-            if (debugToggle != _showAiDebugPanel)
-                SetShowAiDebugPanel(debugToggle);
-
-            if (GUILayout.Button("清空历史", EditorStyles.toolbarButton, GUILayout.Width(70)))
+            if (!_isMinimized)
             {
-                ResetAll();
+                var debugToggle = GUILayout.Toggle(
+                    _showAiDebugPanel,
+                    new GUIContent("API 日志", "在窗口右侧通顶通底一列；窗口会加宽，聊天区域宽度保持不变"),
+                    EditorStyles.toolbarButton,
+                    GUILayout.Width(72));
+                if (debugToggle != _showAiDebugPanel)
+                    SetShowAiDebugPanel(debugToggle);
+
+                if (GUILayout.Button("清空历史", EditorStyles.toolbarButton, GUILayout.Width(70)))
+                    ResetAll();
             }
+
+            var minimizeLabel = new GUIContent(
+                _isMinimized ? "▲ 展开" : "▼ 最小化",
+                _isMinimized ? "展开窗口" : "折叠为工具栏，点击再展开");
+            if (GUILayout.Button(minimizeLabel, EditorStyles.toolbarButton, GUILayout.Width(72)))
+                ToggleMinimized();
 
             EditorGUILayout.EndHorizontal();
         }
@@ -624,10 +663,56 @@ namespace UnityMCP.UI
             EditorGUILayout.LabelField("用户", _chatTitleUserStyle!, GUILayout.ExpandWidth(false));
             EditorGUILayout.EndHorizontal();
 
-            DrawSelectableLabel(msg.Content, _userBubbleStyle!, UserBubbleTextWidth());
+            if (!string.IsNullOrEmpty(msg.Content))
+                DrawSelectableLabel(msg.Content, _userBubbleStyle!, UserBubbleTextWidth());
+
+            // 拖入附件缩略图区
+            if (msg.DroppedAssets != null && msg.DroppedAssets.Count > 0)
+                DrawDroppedAssetsInBubble(msg.DroppedAssets);
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawDroppedAssetsInBubble(List<string> assets)
+        {
+            EditorGUILayout.Space(4);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("📎 附件", EditorStyles.miniBoldLabel);
+
+            foreach (var path in assets)
+            {
+                var ext     = System.IO.Path.GetExtension(path).ToLowerInvariant();
+                var isImage = ext is ".png" or ".jpg" or ".jpeg" or ".tga" or ".bmp" or ".exr" or ".psd";
+
+                EditorGUILayout.BeginHorizontal();
+                if (isImage && path.StartsWith("Assets/", StringComparison.Ordinal))
+                {
+                    var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                    if (tex != null)
+                    {
+                        GUILayout.Label(tex, GUILayout.Width(48), GUILayout.Height(48));
+                    }
+                }
+
+                EditorGUILayout.BeginVertical();
+                EditorGUILayout.LabelField(System.IO.Path.GetFileName(path), EditorStyles.miniBoldLabel);
+                EditorGUILayout.LabelField(path, EditorStyles.miniLabel);
+
+                // 点击可在 Project 中定位
+                if (path.StartsWith("Assets/", StringComparison.Ordinal))
+                {
+                    if (GUILayout.Button("在 Project 中定位", EditorStyles.miniButton, GUILayout.Width(110)))
+                    {
+                        var obj = AssetDatabase.LoadMainAssetAtPath(path);
+                        if (obj != null) { Selection.activeObject = obj; EditorGUIUtility.PingObject(obj); }
+                    }
+                }
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.Space(2);
+            }
+            EditorGUILayout.EndVertical();
         }
 
         private void DrawAssistantMessage(ChatMessage msg)
@@ -670,6 +755,9 @@ namespace UnityMCP.UI
                 case MessageTypeEnum.AssetOpsReady:
                     DrawAssetOpsReadyState(msg);
                     break;
+                case MessageTypeEnum.TextureGenerated:
+                    DrawTextureGeneratedState(msg);
+                    break;
                 case MessageTypeEnum.SuccessResult:
                     DrawSuccessState(msg);
                     break;
@@ -685,19 +773,23 @@ namespace UnityMCP.UI
 
         private void DrawInputArea()
         {
+            // ── 附件栏（有附件或始终显示 + 按钮）──
+            DrawAttachmentBar();
+
+            // ── 输入行（与原来完全一致）──
             EditorGUILayout.BeginHorizontal();
 
             string hint = _currentMode switch
             {
-                GenerateMode.AiJudge => "用自然语言描述即可；AI 会判断生成脚本、预制体、联合或场景内操控。例：写飞机控制器脚本 / 做带血条 UI 预制体 / 脚本+预制体联合 / 在当前场景根下建个 Door 并加碰撞体",
-                GenerateMode.Code => "描述你需要的脚本，如：创建一个包含WASD移动的Player脚本",
-                GenerateMode.Prefab => "描述你需要的预制体，如：创建一个包含碰撞体的玩家预制体",
-                GenerateMode.Combined => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
-                GenerateMode.SceneOps => "描述在当前场景要做的事情，如：在根下建空物体 Door，加 BoxCollider；或把 Props/Crate 挂到选中物体下；或实例化 Assets/.../Enemy.prefab",
-                GenerateMode.ProjectQuery => "根据当前工程真实数据提问，如：项目里有哪些预制体、脚本大概有多少、用了哪些包",
-                GenerateMode.AssetDelete =>
-                    "说明要删除的资源：完整路径，或脚本写 类名.cs（如 ObjectColorChanger.cs），插件会先自动解析，无需 AI",
-                GenerateMode.AssetOps => "说明要如何整理 Assets：例如把某文件夹下材质移到 Archive、批量重命名、复制 prefab、新建 Assets/.../UI 文件夹",
+                GenerateMode.AiJudge        => "用自然语言描述即可；也可用左侧 + 或拖拽附件一起发送。",
+                GenerateMode.Code           => "描述你需要的脚本，如：创建一个包含WASD移动的Player脚本",
+                GenerateMode.Prefab         => "描述你需要的预制体，如：创建一个包含碰撞体的玩家预制体",
+                GenerateMode.Combined       => "描述需要的功能，如：创建一个可拾取的道具(包含脚本和预制体)",
+                GenerateMode.SceneOps       => "描述在当前场景要做的事情，如：在根下建空物体 Door，加 BoxCollider",
+                GenerateMode.ProjectQuery   => "根据当前工程真实数据提问，如：项目里有哪些预制体、脚本大概有多少",
+                GenerateMode.AssetDelete    => "说明要删除的资源：完整路径，或脚本写 类名.cs（如 ObjectColorChanger.cs）",
+                GenerateMode.AssetOps       => "说明要如何整理 Assets：例如把某文件夹下材质移到 Archive、批量重命名",
+                GenerateMode.TextureGenerate => "描述要生成的图片：如「生成一张无缝草地贴图」「帮我画一个角色头像图标」",
                 _ => ""
             };
 
@@ -712,15 +804,15 @@ namespace UnityMCP.UI
                 GUI.Label(rect, hint, EditorStyles.centeredGreyMiniLabel);
             }
 
-            bool canSend = !string.IsNullOrWhiteSpace(_userInput) && !_isGenerating;
+            bool canSend = (!string.IsNullOrWhiteSpace(_userInput) || _pendingDroppedAssets.Count > 0) && !_isGenerating;
             GUI.enabled = canSend;
 
             if (GUILayout.Button("发送\n(Ctrl+Enter)", GUILayout.Width(90), GUILayout.Height(60)))
-            {
                 StartNewTask();
-            }
 
-            if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return && Event.current.control && canSend)
+            if (Event.current.type == EventType.KeyDown &&
+                Event.current.keyCode == KeyCode.Return &&
+                Event.current.control && canSend)
             {
                 StartNewTask();
                 Event.current.Use();
@@ -728,6 +820,292 @@ namespace UnityMCP.UI
 
             GUI.enabled = true;
             EditorGUILayout.EndHorizontal();
+
+            // ── 拖拽检测（覆盖整个输入区）──
+            HandleDragDrop();
+        }
+
+        /// <summary>
+        /// 附件栏：始终显示一行，包含「+」按钮和已添加的附件 chip（横向滚动）。
+        /// </summary>
+        private void DrawAttachmentBar()
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            // ＋ 按钮：固定 22×22 小方块
+            if (GUILayout.Button("+", GUILayout.Width(22), GUILayout.Height(22)))
+                OpenAttachFilePicker();
+
+            // 附件 chip 列表（横向，超出自然换行）
+            string? toRemove = null;
+            foreach (var path in _pendingDroppedAssets)
+            {
+                var ext     = Path.GetExtension(path).ToLowerInvariant();
+                var isImage = ext is ".png" or ".jpg" or ".jpeg" or ".tga" or ".bmp" or ".exr" or ".psd";
+                Texture2D? thumb = null;
+                if (isImage && path.StartsWith("Assets/", StringComparison.Ordinal))
+                    thumb = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+
+                // chip 外框
+                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox,
+                    GUILayout.Height(22), GUILayout.MaxWidth(180));
+
+                // 缩略图 or 类型文字
+                if (thumb != null)
+                    GUILayout.Label(thumb, GUILayout.Width(20), GUILayout.Height(20));
+                else
+                {
+                    var label = ext switch
+                    {
+                        ".prefab" => "Prefab",
+                        ".mat"    => "Mat",
+                        ".cs"     => "CS",
+                        ".fbx" or ".obj" => "3D",
+                        ".mp3" or ".wav" or ".ogg" or ".aiff" or ".aif" or ".flac" => "Audio",
+                        ".mp4" or ".mov" or ".avi" or ".webm" or ".asf" or ".mpg" or ".mpeg" => "Video",
+                        _ => ext.TrimStart('.').ToUpper()
+                    };
+                    EditorGUILayout.LabelField(label, EditorStyles.miniBoldLabel,
+                        GUILayout.Width(Mathf.Clamp(label.Length * 7, 24, 48)));
+                }
+
+                // 文件名（截断）
+                var name = Path.GetFileNameWithoutExtension(path);
+                if (name.Length > 12) name = name.Substring(0, 10) + "…";
+                EditorGUILayout.LabelField(name, EditorStyles.miniLabel, GUILayout.MinWidth(30));
+
+                // × 删除
+                if (GUILayout.Button("×", EditorStyles.miniLabel, GUILayout.Width(14), GUILayout.Height(18)))
+                    toRemove = path;
+
+                EditorGUILayout.EndHorizontal();
+            }
+
+            if (toRemove != null) { _pendingDroppedAssets.Remove(toRemove); Repaint(); }
+
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        /// <summary>
+        /// 监听拖拽事件：接受工程内路径直接使用；工程外文件询问后自动导入。
+        /// </summary>
+        private void HandleDragDrop()
+        {
+            var ev = Event.current;
+            if (ev.type != EventType.DragUpdated && ev.type != EventType.DragPerform)
+                return;
+
+            var paths = DragAndDrop.paths;
+            if (paths == null || paths.Length == 0) return;
+
+            DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+
+            if (ev.type == EventType.DragPerform)
+            {
+                DragAndDrop.AcceptDrag();
+                foreach (var rawPath in paths)
+                {
+                    if (string.IsNullOrEmpty(rawPath)) continue;
+                    AddFileAsAttachment(rawPath);
+                }
+                Repaint();
+            }
+            ev.Use();
+        }
+
+        /// <summary>
+        /// 点击「+」按钮弹出文件选择框；支持选择工程内外的文件。
+        /// </summary>
+        private void OpenAttachFilePicker()
+        {
+            var picked = EditorUtility.OpenFilePanelWithFilters(
+                "选择附件",
+                Application.dataPath,
+                new[]
+                {
+                    "图片",   "png,jpg,jpeg,tga,bmp,exr,psd,hdr",
+                    "音频",   "mp3,wav,ogg,aiff,aif,flac",
+                    "视频",   "mp4,mov,avi,webm,asf,mpg,mpeg",
+                    "资源文件", "prefab,mat,cs,fbx,obj,anim,unity",
+                    "所有文件", "*"
+                });
+
+            if (string.IsNullOrEmpty(picked)) return;
+            AddFileAsAttachment(picked);
+            Repaint();
+        }
+
+        /// <summary>
+        /// 统一处理「添加附件」：工程内直接使用；工程外图片询问导入目录后自动复制并导入。
+        /// </summary>
+        private void AddFileAsAttachment(string rawPath)
+        {
+            var assetPath = ToAssetPath(rawPath);
+
+            // ── 已在工程内，直接用 ──
+            if (!string.IsNullOrEmpty(assetPath))
+            {
+                TryAddPending(assetPath);
+                return;
+            }
+
+            // ── 工程外文件：支持图片 / 音频 / 视频自动导入 ──
+            var ext     = Path.GetExtension(rawPath).ToLowerInvariant();
+            var isImage = ext is ".png" or ".jpg" or ".jpeg" or ".tga"
+                                 or ".bmp" or ".exr" or ".psd" or ".hdr";
+            var isAudio = ext is ".mp3" or ".wav" or ".ogg" or ".aiff" or ".aif" or ".flac";
+            var isVideo = ext is ".mp4" or ".mov" or ".avi" or ".webm" or ".asf" or ".mpg" or ".mpeg";
+
+            if (!isImage && !isAudio && !isVideo)
+            {
+                EditorUtility.DisplayDialog(
+                    "无法自动导入",
+                    $"该文件类型暂不支持从工程外自动导入：\n{rawPath}\n\n" +
+                    "支持自动导入的类型：图片、音频（mp3/wav/ogg 等）、视频（mp4/mov/webm 等）。\n" +
+                    "其他类型请先手动复制到 Assets 目录内。",
+                    "确定");
+                return;
+            }
+
+            // 默认目标文件夹按类型区分
+            var defaultSubFolder = isImage ? "Textures/Imported"
+                                 : isAudio ? "Audio/Imported"
+                                 :           "Video/Imported";
+
+            // 使用 delayCall 延迟到下一帧打开文件夹选择框，避免两个原生对话框连续弹出时
+            // Windows 在第二个对话框关闭后将焦点归还给第一个对话框的问题。
+            var capturedRawPath      = rawPath;
+            var capturedDefaultSub   = defaultSubFolder;
+            var capturedIsImage      = isImage;
+            var capturedIsAudio      = isAudio;
+            EditorApplication.delayCall += () => ImportExternalFileDelayed(
+                capturedRawPath, capturedDefaultSub, capturedIsImage, capturedIsAudio);
+        }
+
+        private void ImportExternalFileDelayed(string rawPath, string defaultSubFolder, bool isImage, bool isAudio)
+        {
+            var typeName      = isImage ? "图片" : isAudio ? "音频" : "视频";
+            var fileName      = Path.GetFileName(rawPath);
+            var defaultFolder = Path.Combine(
+                Application.dataPath,
+                defaultSubFolder.Replace('/', Path.DirectorySeparatorChar));
+            var defaultAssetFolder = "Assets/" + defaultSubFolder;
+
+            // 用 DisplayDialogComplex 三选一：导入默认位置 / 自定义位置 / 取消
+            // 这样避免直接弹 OpenFolderPanel，规避 Unity 原生文件夹对话框会继承上次文件
+            // 选择路径（而非我们期望的默认路径）的问题。
+            var choice = EditorUtility.DisplayDialogComplex(
+                $"导入{typeName}到工程",
+                $"文件「{fileName}」位于工程目录之外，需要将其复制到 Assets 文件夹内才能使用。\n\n" +
+                $"默认导入位置：{defaultAssetFolder}",
+                "导入到默认位置",   // 0
+                "取消",             // 1
+                "自定义位置…");     // 2
+
+            if (choice == 1) return; // 取消
+
+            string destFolderAsset;
+            if (choice == 2)
+            {
+                // 自定义：确保默认目录先存在，再打开文件夹选择器
+                if (!Directory.Exists(defaultFolder))
+                    Directory.CreateDirectory(defaultFolder);
+
+                var destFolder = EditorUtility.OpenFolderPanel(
+                    $"将{typeName}「{fileName}」导入到哪个文件夹？", defaultFolder, "");
+
+                if (string.IsNullOrEmpty(destFolder)) return;
+
+                destFolderAsset = ToAssetPath(destFolder);
+                if (string.IsNullOrEmpty(destFolderAsset))
+                {
+                    EditorUtility.DisplayDialog(
+                        "目标文件夹无效",
+                        $"请选择工程 Assets 目录内的文件夹。\n选中的是：{destFolder}",
+                        "确定");
+                    return;
+                }
+            }
+            else
+            {
+                // 默认位置
+                destFolderAsset = defaultAssetFolder;
+            }
+
+            // 确保目标文件夹存在
+            var absDest = Path.Combine(
+                Application.dataPath.Replace('/', Path.DirectorySeparatorChar),
+                destFolderAsset.Substring("Assets/".Length).Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(absDest))
+                Directory.CreateDirectory(absDest);
+
+            // 复制文件（如同名则加 _1 _2 ...）
+            var ext          = Path.GetExtension(rawPath).ToLowerInvariant();
+            var destFileName = fileName;
+            var destFile     = Path.Combine(absDest, destFileName);
+            if (File.Exists(destFile))
+            {
+                var nameNoExt = Path.GetFileNameWithoutExtension(destFileName);
+                for (var i = 1; i <= 999; i++)
+                {
+                    var candidate = Path.Combine(absDest, $"{nameNoExt}_{i}{ext}");
+                    if (!File.Exists(candidate)) { destFile = candidate; destFileName = Path.GetFileName(candidate); break; }
+                }
+            }
+
+            File.Copy(rawPath, destFile);
+
+            // 导入并配置
+            var importedPath = $"{destFolderAsset}/{destFileName}";
+            AssetDatabase.ImportAsset(importedPath, ImportAssetOptions.ForceUpdate);
+            if (isImage && AssetImporter.GetAtPath(importedPath) is TextureImporter ti)
+            {
+                ti.textureType        = TextureImporterType.Default;
+                ti.maxTextureSize     = 2048;
+                ti.textureCompression = TextureImporterCompression.Compressed;
+                ti.SaveAndReimport();
+            }
+            else if (isAudio && AssetImporter.GetAtPath(importedPath) is AudioImporter ai)
+            {
+                var sampleSettings = ai.defaultSampleSettings;
+                sampleSettings.loadType        = AudioClipLoadType.DecompressOnLoad;
+                sampleSettings.compressionFormat = AudioCompressionFormat.Vorbis;
+                ai.defaultSampleSettings = sampleSettings;
+                ai.SaveAndReimport();
+            }
+            // VideoClipImporter 使用默认设置即可，无需额外配置
+
+            TryAddPending(importedPath);
+            ShowNotification(new GUIContent($"已导入：{importedPath}"));
+        }
+
+        private void TryAddPending(string assetPath)
+        {
+            if (!_pendingDroppedAssets.Contains(assetPath))
+                _pendingDroppedAssets.Add(assetPath);
+        }
+
+        /// <summary>
+        /// 将绝对路径或 Unity 内部路径统一转为 Assets/... 相对路径。
+        /// 若路径在工程外则返回空字符串。
+        /// </summary>
+        private static string ToAssetPath(string rawPath)
+        {
+            if (rawPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) ||
+                rawPath.StartsWith("Assets\\", StringComparison.OrdinalIgnoreCase))
+                return rawPath.Replace('\\', '/');
+
+            var dataPath    = Application.dataPath.Replace('\\', '/');
+            var projectRoot = dataPath.Substring(0, dataPath.Length - "Assets".Length);
+            var normalized  = rawPath.Replace('\\', '/');
+            if (normalized.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                var relative = normalized.Substring(projectRoot.Length);
+                if (relative.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                    return relative;
+            }
+            return "";
         }
 
         #endregion

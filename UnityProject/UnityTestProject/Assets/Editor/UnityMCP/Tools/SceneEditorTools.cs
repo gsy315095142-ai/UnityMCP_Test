@@ -651,7 +651,10 @@ namespace UnityMCP.Tools
 
                         if (!AssetPathSecurity.TryValidateGenericAssetPath(v, out var ap, out _))
                             return (false, $"ObjectReference 须为 Assets 路径或 null: {v}");
-                        prop.objectReferenceValue = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(ap);
+
+                        prop.objectReferenceValue = LoadObjectReferenceForProperty(prop, ap);
+                        if (prop.objectReferenceValue == null)
+                            return (false, $"无法加载资源（路径可能不存在，或类型不匹配）：{ap}");
                         return (true, null);
                     default:
                         return (false, $"暂不支持的属性类型: {prop.propertyType}");
@@ -661,6 +664,48 @@ namespace UnityMCP.Tools
             {
                 return (false, ex.Message);
             }
+        }
+
+        /// <summary>
+        /// 根据 SerializedProperty 声明的对象类型（prop.type 形如 "PPtr&lt;$Sprite&gt;"）
+        /// 用最合适的方式加载资源。
+        /// 若属性期望 Sprite 但贴图尚未被设为 Sprite 导入模式，自动重新导入。
+        /// </summary>
+        private static UnityEngine.Object? LoadObjectReferenceForProperty(SerializedProperty prop, string assetPath)
+        {
+            var propType = prop.type; // e.g. "PPtr<$Sprite>", "PPtr<$Texture2D>", "PPtr<$AudioClip>"
+
+            if (propType.Contains("Sprite"))
+            {
+                // 尝试直接加载 Sprite 子资源
+                var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                if (sprite != null) return sprite;
+
+                // 贴图未以 Sprite 模式导入 → 自动重新导入
+                if (AssetImporter.GetAtPath(assetPath) is TextureImporter ti)
+                {
+                    ti.textureType      = TextureImporterType.Sprite;
+                    ti.spriteImportMode = SpriteImportMode.Single;
+                    ti.SaveAndReimport();
+                    return AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                }
+                return null;
+            }
+
+            if (propType.Contains("Texture2D") || propType.Contains("Texture"))
+                return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+
+            if (propType.Contains("AudioClip"))
+                return AssetDatabase.LoadAssetAtPath<AudioClip>(assetPath);
+
+            if (propType.Contains("Material"))
+                return AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+
+            if (propType.Contains("GameObject"))
+                return AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+
+            // 兜底：通用加载
+            return AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath);
         }
 
         private static Color? ParseColor(string raw)
