@@ -1,6 +1,8 @@
 #nullable enable
 
+using System.Text;
 using UnityEditor;
+using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityMCP.Core;
 using UnityMCP.Tools;
@@ -47,9 +49,8 @@ namespace UnityMCP.AI
 
         /// <summary>预制体 JSON 的简短 Few-shot（Phase 2-B，稳住 Qwen 等本地模型格式）。</summary>
         private const string PrefabFormatFewShot = @"
-## 结构示例（字段名区分大小写，与本示例一致）
+## 结构示例一（3D 立方体）
 用户：做一个静止的立方体道具
-应输出类似：
 ```json
 {
   ""prefabName"": ""StaticCube"",
@@ -65,6 +66,101 @@ namespace UnityMCP.AI
       { ""type"": ""BoxCollider"", ""properties"": { ""isTrigger"": ""false"" } }
     ],
     ""children"": []
+  }
+}
+```
+
+## 结构示例二（UI：Canvas + 两个按钮）
+用户：做一个带「确认」和「取消」两个按钮的 UI
+```json
+{
+  ""prefabName"": ""TwoButtonUI"",
+  ""rootObject"": {
+    ""name"": ""Canvas"",
+    ""tag"": ""Untagged"",
+    ""active"": true,
+    ""position"": [0, 0, 0],
+    ""rotation"": [0, 0, 0],
+    ""scale"": [1, 1, 1],
+    ""anchoredPosition"": [0, 0],
+    ""sizeDelta"": [0, 0],
+    ""anchorMin"": [0, 0],
+    ""anchorMax"": [1, 1],
+    ""components"": [
+      { ""type"": ""Canvas"",           ""properties"": { ""renderMode"": ""ScreenSpaceOverlay"" } },
+      { ""type"": ""CanvasScaler"",      ""properties"": { ""uiScaleMode"": ""ScaleWithScreenSize"", ""referenceResolution"": ""1920, 1080"" } },
+      { ""type"": ""GraphicRaycaster"",  ""properties"": {} }
+    ],
+    ""children"": [
+      {
+        ""name"": ""ConfirmButton"",
+        ""active"": true,
+        ""position"": [0, 0, 0],
+        ""rotation"": [0, 0, 0],
+        ""scale"": [1, 1, 1],
+        ""anchoredPosition"": [-150, -400],
+        ""sizeDelta"": [240, 80],
+        ""anchorMin"": [0.5, 0.5],
+        ""anchorMax"": [0.5, 0.5],
+        ""pivot"": [0.5, 0.5],
+        ""components"": [
+          { ""type"": ""Image"",  ""properties"": { ""color"": ""#4A90D9FF"" } },
+          { ""type"": ""Button"", ""properties"": {} }
+        ],
+        ""children"": [
+          {
+            ""name"": ""Label"",
+            ""active"": true,
+            ""position"": [0, 0, 0],
+            ""rotation"": [0, 0, 0],
+            ""scale"": [1, 1, 1],
+            ""anchoredPosition"": [0, 0],
+            ""sizeDelta"": [0, 0],
+            ""anchorMin"": [0, 0],
+            ""anchorMax"": [1, 1],
+            ""pivot"": [0.5, 0.5],
+            ""components"": [
+              { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""确认"", ""fontSize"": ""28"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
+            ],
+            ""children"": []
+          }
+        ]
+      },
+      {
+        ""name"": ""CancelButton"",
+        ""active"": true,
+        ""position"": [0, 0, 0],
+        ""rotation"": [0, 0, 0],
+        ""scale"": [1, 1, 1],
+        ""anchoredPosition"": [150, -400],
+        ""sizeDelta"": [240, 80],
+        ""anchorMin"": [0.5, 0.5],
+        ""anchorMax"": [0.5, 0.5],
+        ""pivot"": [0.5, 0.5],
+        ""components"": [
+          { ""type"": ""Image"",  ""properties"": { ""color"": ""#E74C3CFF"" } },
+          { ""type"": ""Button"", ""properties"": {} }
+        ],
+        ""children"": [
+          {
+            ""name"": ""Label"",
+            ""active"": true,
+            ""position"": [0, 0, 0],
+            ""rotation"": [0, 0, 0],
+            ""scale"": [1, 1, 1],
+            ""anchoredPosition"": [0, 0],
+            ""sizeDelta"": [0, 0],
+            ""anchorMin"": [0, 0],
+            ""anchorMax"": [1, 1],
+            ""pivot"": [0.5, 0.5],
+            ""components"": [
+              { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""取消"", ""fontSize"": ""28"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
+            ],
+            ""children"": []
+          }
+        ]
+      }
+    ]
   }
 }
 ```
@@ -560,7 +656,9 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
             var body = $@"## 当前活动场景
 {sceneLine}
 
-{BuildSceneOpsHierarchyEditorHint()}
+{BuildSceneHierarchyDump()}
+
+{BuildSceneOpsSelectionHint()}
 
 ## 用户需求（原文）
 {userRequest}
@@ -575,9 +673,60 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
         }
 
         /// <summary>
-        /// 告诉模型当前是否选中物体；未选中时禁止产出 __selection__，减少执行失败。
+        /// 把当前活动场景的 Hierarchy 树（最多 maxDepth 层、maxNodes 个节点）转为可读文本，
+        /// 附带每个节点的**完整层级路径**，供 AI 直接引用，不再猜测。
         /// </summary>
-        private static string BuildSceneOpsHierarchyEditorHint()
+        private static string BuildSceneHierarchyDump(int maxDepth = 6, int maxNodes = 120)
+        {
+            var scene = SceneManager.GetActiveScene();
+            if (!scene.IsValid())
+                return "## 当前场景 Hierarchy\n（场景无效，无法获取 Hierarchy）";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("## 当前场景 Hierarchy（真实路径列表，op 的 path/parentPath 必须从此选取或拼接）");
+            sb.AppendLine("格式：`缩进树形` → 每行括号内为**可直接填入 path 字段的完整层级路径**");
+
+            var count = 0;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (count >= maxNodes) break;
+                DumpGameObject(sb, root.transform, "", root.name, maxDepth, maxNodes, ref count);
+            }
+
+            if (count >= maxNodes)
+                sb.AppendLine($"  …（仅展示前 {maxNodes} 个节点，场景可能有更多物体）");
+
+            sb.AppendLine();
+            sb.AppendLine("**规则：** `path` 字段必须与上表括号内路径完全一致（大小写、空格）；不要拼造表中不存在的路径。");
+            return sb.ToString().TrimEnd();
+        }
+
+        private static void DumpGameObject(
+            StringBuilder sb,
+            Transform t,
+            string indent,
+            string fullPath,
+            int maxDepth,
+            int maxNodes,
+            ref int count)
+        {
+            if (count >= maxNodes) return;
+            count++;
+            sb.AppendLine($"{indent}- {t.name}  (`{fullPath}`)");
+
+            if (maxDepth <= 1) return;
+            for (var i = 0; i < t.childCount; i++)
+            {
+                if (count >= maxNodes) break;
+                var child = t.GetChild(i);
+                DumpGameObject(sb, child, indent + "  ", fullPath + "/" + child.name, maxDepth - 1, maxNodes, ref count);
+            }
+        }
+
+        /// <summary>
+        /// 仅告知选中状态（已从 Hierarchy 树中知道路径，此处只做选中/未选中提示）。
+        /// </summary>
+        private static string BuildSceneOpsSelectionHint()
         {
             var scene = SceneManager.GetActiveScene();
             var sel = Selection.activeGameObject;
@@ -586,21 +735,14 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
                 var path = HierarchyLocator.GetHierarchyPath(scene, sel);
                 if (!string.IsNullOrEmpty(path))
                 {
-                    return "## 编辑器状态（Hierarchy）\n" +
-                           $"当前**已选中**物体，层级路径为：`{path}`\n" +
-                           "若用户希望挂到「这个 UI」且与选中一致，可把 createEmpty / instantiatePrefab 的 parentPath **直接写成上述路径**（优于 __selection__，避免用户改选后路径漂移）。\n" +
-                           "仅在用户**原文明确要求**用当前选中作父时，才使用 `__selection__`。";
+                    return "## 编辑器状态（当前选中）\n" +
+                           $"当前**已选中**物体，层级路径：`{path}`\n" +
+                           "可直接把该路径用作 parentPath；仅在用户**原文明确要求**时才用 `__selection__`。";
                 }
-
-                return "## 编辑器状态（Hierarchy）\n" +
-                       "当前有选中物体，但无法解析其在活动场景下的层级路径（可能不属于活动场景）。\n" +
-                       "请勿使用 `__selection__`；请根据用户需求写明确路径（如 Canvas/Panel）。";
             }
 
-            return "## 编辑器状态（Hierarchy）\n" +
-                   "当前**未选中**任何 GameObject。\n" +
-                   "**禁止** 在 JSON 的 parentPath / newParentPath 中使用 `__selection__`（会导致执行第一步就失败）。\n" +
-                   "请根据用户需求写**从场景根起的完整路径**（如 `Canvas`、`Canvas/Panel`）。用户说「在这个 UI 上」时，用场景中已有的 UI 根/容器路径，不要写 __selection__。";
+            return "## 编辑器状态（当前选中）\n" +
+                   "当前**未选中**任何 GameObject，**禁止**在 parentPath / newParentPath 使用 `__selection__`。";
         }
 
         #endregion
@@ -744,13 +886,15 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 - 支持的 UI 组件: Canvas, CanvasScaler, GraphicRaycaster, Image, RawImage, Button, Text, InputField, Toggle, Slider, Dropdown, ScrollRect, HorizontalLayoutGroup, VerticalLayoutGroup, GridLayoutGroup, Mask, Outline, CanvasGroup, TextMeshProUGUI, TMP_InputField, TMP_Dropdown
 - 自定义脚本使用类名即可
 
-## UI 预制体特殊规则
-如果用户要求创建 UI 元素：
-1. 根对象必须添加 Canvas、CanvasScaler、GraphicRaycaster 三个组件
-2. Canvas 的 renderMode 属性设为 ""ScreenSpaceOverlay""（或根据需求）
-3. 所有 UI 子对象的 position/scale 用 RectTransform 属性，通过 properties 设置 anchorMin、anchorMax、sizeDelta 等
-4. Button 需要一个子对象 Text 或 TextMeshProUGUI 显示按钮文字
-5. InputField 需要子对象 Placeholder 和 Text
+## UI 预制体规则（重要）
+如果用户要求创建 UI 元素，**严格按示例二的结构输出**：
+1. **根对象**（Canvas）必须挂 Canvas + CanvasScaler + GraphicRaycaster；Canvas 的 renderMode 设 `ScreenSpaceOverlay`；CanvasScaler 的 uiScaleMode 设 `ScaleWithScreenSize`，referenceResolution `1920, 1080`
+2. **坐标协议**：所有 UI 对象（Canvas 根节点除外）使用顶层字段 **`anchoredPosition`**（像素，相对锚点）和 **`sizeDelta`**（像素宽高）；同时也保留 `position: [0,0,0]`（插件优先读 anchoredPosition）
+3. **锚点**：Canvas 根 `anchorMin:[0,0]` `anchorMax:[1,1]`；Button / Image 等固定大小控件用 `anchorMin:[0.5,0.5]` `anchorMax:[0.5,0.5]`；全屏背景用 `anchorMin:[0,0]` `anchorMax:[1,1]` + `sizeDelta:[0,0]`；`pivot:[0.5,0.5]`
+4. **Button**：每个 Button 必须有子对象挂 **TextMeshProUGUI** 显示按钮文字（`anchorMin:[0,0]` `anchorMax:[1,1]` `sizeDelta:[0,0]`）
+5. **InputField**：子对象需 Placeholder 和 Text（均挂 TextMeshProUGUI）
+6. **不要**为 UI 对象设置 `primitive` 字段；`scale` 始终保持 `[1,1,1]`
+7. 参考坐标：1920×1080 参考分辨率，屏幕中心为 (0,0)，左下角约 (-960,-540)
 
 ## 属性值格式
 - 数字: 直接写数字，如 ""mass"": ""2.5""

@@ -256,8 +256,6 @@ namespace UnityMCP.Generators
             if (desc.layer != 0)
                 go.layer = desc.layer;
 
-            ApplyTransform(go.transform, desc);
-
             foreach (var compDesc in desc.components)
             {
                 var compResult = ComponentConfigurator.AddAndConfigure(go, compDesc);
@@ -270,6 +268,9 @@ namespace UnityMCP.Generators
                     warnings.AddRange(compResult.Warnings);
                 }
             }
+
+            // 组件添加完毕后再 Apply Transform，确保 Canvas/RectTransform 已就绪
+            ApplyTransform(go.transform, desc);
 
             foreach (var childDesc in desc.children)
             {
@@ -292,10 +293,19 @@ namespace UnityMCP.Generators
         }
 
         /// <summary>
-        /// 应用 Transform 数据
+        /// 应用 Transform 数据：有 RectTransform 时走 UI 专属字段；否则走普通 localPosition/Scale。
         /// </summary>
         private static void ApplyTransform(Transform transform, GameObjectDescription desc)
         {
+            var rt = transform.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                ApplyRectTransform(rt, desc);
+                if (desc.rotation is { Length: >= 3 })
+                    rt.localRotation = Quaternion.Euler(desc.rotation[0], desc.rotation[1], desc.rotation[2]);
+                return;
+            }
+
             if (desc.position is { Length: >= 3 })
                 transform.localPosition = new Vector3(desc.position[0], desc.position[1], desc.position[2]);
 
@@ -304,6 +314,33 @@ namespace UnityMCP.Generators
 
             if (desc.scale is { Length: >= 3 })
                 transform.localScale = new Vector3(desc.scale[0], desc.scale[1], desc.scale[2]);
+        }
+
+        /// <summary>
+        /// 应用 RectTransform 专属属性：优先使用 anchoredPosition / sizeDelta / anchorMin / anchorMax / pivot，
+        /// 回退到 desc.position[0..1] 作为 anchoredPosition。
+        /// </summary>
+        private static void ApplyRectTransform(RectTransform rt, GameObjectDescription desc)
+        {
+            if (desc.anchorMin is { Length: >= 2 })
+                rt.anchorMin = new Vector2(desc.anchorMin[0], desc.anchorMin[1]);
+
+            if (desc.anchorMax is { Length: >= 2 })
+                rt.anchorMax = new Vector2(desc.anchorMax[0], desc.anchorMax[1]);
+
+            if (desc.pivot is { Length: >= 2 })
+                rt.pivot = new Vector2(desc.pivot[0], desc.pivot[1]);
+
+            if (desc.anchoredPosition is { Length: >= 2 })
+                rt.anchoredPosition = new Vector2(desc.anchoredPosition[0], desc.anchoredPosition[1]);
+            else if (desc.position is { Length: >= 2 })
+                rt.anchoredPosition = new Vector2(desc.position[0], desc.position[1]);
+
+            if (desc.sizeDelta is { Length: >= 2 })
+                rt.sizeDelta = new Vector2(desc.sizeDelta[0], desc.sizeDelta[1]);
+
+            if (desc.scale is { Length: >= 3 })
+                rt.localScale = new Vector3(desc.scale[0], desc.scale[1], desc.scale[2]);
         }
 
         private static bool EnsureDirectoryExists(string assetPath)

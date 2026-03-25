@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+#pragma warning disable CS0649
 
 namespace UnityMCP.Generators
 {
@@ -37,7 +38,7 @@ namespace UnityMCP.Generators
         /// <summary>是否激活</summary>
         public bool active = true;
 
-        /// <summary>本地坐标</summary>
+        /// <summary>本地坐标（3D 用）；UI 元素请留 [0,0,0] 并用 anchoredPosition 代替</summary>
         public float[] position = { 0, 0, 0 };
 
         /// <summary>本地旋转（欧拉角）</summary>
@@ -45,6 +46,29 @@ namespace UnityMCP.Generators
 
         /// <summary>本地缩放</summary>
         public float[] scale = { 1, 1, 1 };
+
+        // ── UI / RectTransform 专属字段（与 position/scale 二选一，UI 元素推荐用以下字段）──
+
+        /// <summary>
+        /// RectTransform.anchoredPosition（像素偏移，相对锚点）。
+        /// 长度 2 时使用 [x, y]；不填则沿用 position[0..1]。
+        /// </summary>
+        public float[] anchoredPosition = Array.Empty<float>();
+
+        /// <summary>
+        /// RectTransform.sizeDelta（宽度、高度，像素）。
+        /// 长度 2 时应用 [width, height]；留空则不覆盖。
+        /// </summary>
+        public float[] sizeDelta = Array.Empty<float>();
+
+        /// <summary>RectTransform.anchorMin [x, y]，取值 0~1</summary>
+        public float[] anchorMin = Array.Empty<float>();
+
+        /// <summary>RectTransform.anchorMax [x, y]，取值 0~1</summary>
+        public float[] anchorMax = Array.Empty<float>();
+
+        /// <summary>RectTransform.pivot [x, y]，取值 0~1，默认 [0.5, 0.5]</summary>
+        public float[] pivot = Array.Empty<float>();
 
         /// <summary>
         /// 若填写 Unity 内置体素类型名（如 Cube、Sphere、Capsule、Cylinder、Plane、Quad），
