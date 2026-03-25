@@ -70,8 +70,14 @@ namespace UnityMCP.AI
 }
 ```
 
-## 结构示例二（UI：Canvas + 两个按钮）
+## 结构示例二（UI：Canvas + 对话框面板 + 两个左右排列的按钮）
 用户：做一个带「确认」和「取消」两个按钮的 UI
+关键布局规则（必须遵守）：
+- Canvas 根：anchorMin [0,0] anchorMax [1,1] sizeDelta [0,0]（全屏）
+- 面板/背景：anchorMin [0.5,0.5] anchorMax [0.5,0.5]（居中固定），sizeDelta 给出具体宽高
+- 多个同级按钮水平排列：用 anchoredPosition 的 x 分量拉开间距，间距 ≥ (按钮宽度 + 40px)
+- 每个 UI 子对象务必设置 anchorMin / anchorMax / anchoredPosition / sizeDelta；**禁止**全部留 [0,0,0]
+
 ```json
 {
   ""prefabName"": ""TwoButtonUI"",
@@ -87,76 +93,109 @@ namespace UnityMCP.AI
     ""anchorMin"": [0, 0],
     ""anchorMax"": [1, 1],
     ""components"": [
-      { ""type"": ""Canvas"",           ""properties"": { ""renderMode"": ""ScreenSpaceOverlay"" } },
-      { ""type"": ""CanvasScaler"",      ""properties"": { ""uiScaleMode"": ""ScaleWithScreenSize"", ""referenceResolution"": ""1920, 1080"" } },
-      { ""type"": ""GraphicRaycaster"",  ""properties"": {} }
+      { ""type"": ""Canvas"",          ""properties"": { ""renderMode"": ""ScreenSpaceOverlay"" } },
+      { ""type"": ""CanvasScaler"",     ""properties"": { ""uiScaleMode"": ""ScaleWithScreenSize"", ""referenceResolution"": ""1920, 1080"" } },
+      { ""type"": ""GraphicRaycaster"", ""properties"": {} }
     ],
     ""children"": [
       {
-        ""name"": ""ConfirmButton"",
+        ""name"": ""DialogPanel"",
         ""active"": true,
         ""position"": [0, 0, 0],
         ""rotation"": [0, 0, 0],
         ""scale"": [1, 1, 1],
-        ""anchoredPosition"": [-150, -400],
-        ""sizeDelta"": [240, 80],
+        ""anchoredPosition"": [0, 0],
+        ""sizeDelta"": [800, 420],
         ""anchorMin"": [0.5, 0.5],
         ""anchorMax"": [0.5, 0.5],
         ""pivot"": [0.5, 0.5],
         ""components"": [
-          { ""type"": ""Image"",  ""properties"": { ""color"": ""#4A90D9FF"" } },
-          { ""type"": ""Button"", ""properties"": {} }
+          { ""type"": ""Image"", ""properties"": { ""color"": ""#2C2C2CDD"" } }
         ],
         ""children"": [
           {
-            ""name"": ""Label"",
+            ""name"": ""TitleText"",
             ""active"": true,
             ""position"": [0, 0, 0],
             ""rotation"": [0, 0, 0],
             ""scale"": [1, 1, 1],
-            ""anchoredPosition"": [0, 0],
-            ""sizeDelta"": [0, 0],
-            ""anchorMin"": [0, 0],
-            ""anchorMax"": [1, 1],
+            ""anchoredPosition"": [0, 140],
+            ""sizeDelta"": [680, 60],
+            ""anchorMin"": [0.5, 0.5],
+            ""anchorMax"": [0.5, 0.5],
             ""pivot"": [0.5, 0.5],
             ""components"": [
-              { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""确认"", ""fontSize"": ""28"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
+              { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""请确认操作"", ""fontSize"": ""36"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
             ],
             ""children"": []
-          }
-        ]
-      },
-      {
-        ""name"": ""CancelButton"",
-        ""active"": true,
-        ""position"": [0, 0, 0],
-        ""rotation"": [0, 0, 0],
-        ""scale"": [1, 1, 1],
-        ""anchoredPosition"": [150, -400],
-        ""sizeDelta"": [240, 80],
-        ""anchorMin"": [0.5, 0.5],
-        ""anchorMax"": [0.5, 0.5],
-        ""pivot"": [0.5, 0.5],
-        ""components"": [
-          { ""type"": ""Image"",  ""properties"": { ""color"": ""#E74C3CFF"" } },
-          { ""type"": ""Button"", ""properties"": {} }
-        ],
-        ""children"": [
+          },
           {
-            ""name"": ""Label"",
+            ""name"": ""ConfirmButton"",
             ""active"": true,
             ""position"": [0, 0, 0],
             ""rotation"": [0, 0, 0],
             ""scale"": [1, 1, 1],
-            ""anchoredPosition"": [0, 0],
-            ""sizeDelta"": [0, 0],
-            ""anchorMin"": [0, 0],
-            ""anchorMax"": [1, 1],
+            ""anchoredPosition"": [-200, -140],
+            ""sizeDelta"": [280, 80],
+            ""anchorMin"": [0.5, 0.5],
+            ""anchorMax"": [0.5, 0.5],
             ""pivot"": [0.5, 0.5],
             ""components"": [
-              { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""取消"", ""fontSize"": ""28"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
+              { ""type"": ""Image"",  ""properties"": { ""color"": ""#3A7FCAFF"" } },
+              { ""type"": ""Button"", ""properties"": {} }
             ],
-            ""children"": []
+            ""children"": [
+              {
+                ""name"": ""Label"",
+                ""active"": true,
+                ""position"": [0, 0, 0],
+                ""rotation"": [0, 0, 0],
+                ""scale"": [1, 1, 1],
+                ""anchoredPosition"": [0, 0],
+                ""sizeDelta"": [0, 0],
+                ""anchorMin"": [0, 0],
+                ""anchorMax"": [1, 1],
+                ""pivot"": [0.5, 0.5],
+                ""components"": [
+                  { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""确认"", ""fontSize"": ""28"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
+                ],
+                ""children"": []
+              }
+            ]
+          },
+          {
+            ""name"": ""CancelButton"",
+            ""active"": true,
+            ""position"": [0, 0, 0],
+            ""rotation"": [0, 0, 0],
+            ""scale"": [1, 1, 1],
+            ""anchoredPosition"": [200, -140],
+            ""sizeDelta"": [280, 80],
+            ""anchorMin"": [0.5, 0.5],
+            ""anchorMax"": [0.5, 0.5],
+            ""pivot"": [0.5, 0.5],
+            ""components"": [
+              { ""type"": ""Image"",  ""properties"": { ""color"": ""#C0392BFF"" } },
+              { ""type"": ""Button"", ""properties"": {} }
+            ],
+            ""children"": [
+              {
+                ""name"": ""Label"",
+                ""active"": true,
+                ""position"": [0, 0, 0],
+                ""rotation"": [0, 0, 0],
+                ""scale"": [1, 1, 1],
+                ""anchoredPosition"": [0, 0],
+                ""sizeDelta"": [0, 0],
+                ""anchorMin"": [0, 0],
+                ""anchorMax"": [1, 1],
+                ""pivot"": [0.5, 0.5],
+                ""components"": [
+                  { ""type"": ""TextMeshProUGUI"", ""properties"": { ""text"": ""取消"", ""fontSize"": ""28"", ""alignment"": ""Center"", ""color"": ""#FFFFFFFF"" } }
+                ],
+                ""children"": []
+              }
+            ]
           }
         ]
       }
@@ -890,11 +929,18 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 如果用户要求创建 UI 元素，**严格按示例二的结构输出**：
 1. **根对象**（Canvas）必须挂 Canvas + CanvasScaler + GraphicRaycaster；Canvas 的 renderMode 设 `ScreenSpaceOverlay`；CanvasScaler 的 uiScaleMode 设 `ScaleWithScreenSize`，referenceResolution `1920, 1080`
 2. **坐标协议**：所有 UI 对象（Canvas 根节点除外）使用顶层字段 **`anchoredPosition`**（像素，相对锚点）和 **`sizeDelta`**（像素宽高）；同时也保留 `position: [0,0,0]`（插件优先读 anchoredPosition）
-3. **锚点**：Canvas 根 `anchorMin:[0,0]` `anchorMax:[1,1]`；Button / Image 等固定大小控件用 `anchorMin:[0.5,0.5]` `anchorMax:[0.5,0.5]`；全屏背景用 `anchorMin:[0,0]` `anchorMax:[1,1]` + `sizeDelta:[0,0]`；`pivot:[0.5,0.5]`
+3. **锚点**：Canvas 根 `anchorMin:[0,0]` `anchorMax:[1,1]`；Button / Image / Panel 等固定大小控件用 `anchorMin:[0.5,0.5]` `anchorMax:[0.5,0.5]`；全屏背景用 `anchorMin:[0,0]` `anchorMax:[1,1]` + `sizeDelta:[0,0]`；`pivot:[0.5,0.5]`
 4. **Button**：每个 Button 必须有子对象挂 **TextMeshProUGUI** 显示按钮文字（`anchorMin:[0,0]` `anchorMax:[1,1]` `sizeDelta:[0,0]`）
 5. **InputField**：子对象需 Placeholder 和 Text（均挂 TextMeshProUGUI）
 6. **不要**为 UI 对象设置 `primitive` 字段；`scale` 始终保持 `[1,1,1]`
 7. 参考坐标：1920×1080 参考分辨率，屏幕中心为 (0,0)，左下角约 (-960,-540)
+
+## UI 排版指南（防止控件重叠）
+- **多个按钮横排**：用 anchoredPosition 的 x 分量拉开距离。2 个按钮、宽 280：左按钮 x=-200，右按钮 x=+200（间距 (200-(-200)) - 280 = 120px 空白）；3 个按钮类推。
+- **多个按钮竖排**：用 anchoredPosition 的 y 分量拉开。上按钮 y=+60，下按钮 y=-60（行高 80 + 40px 间距）。
+- **面板内部布局**：标题放顶部（y = 面板高/2 - 50），按钮放底部（y = -(面板高/2 - 60)）。
+- **禁止**多个同级 UI 控件全用 anchoredPosition [0,0]（会叠在同一位置）。
+- **最小间距规则**：相邻控件边缘距离至少 20px；`| x差值 | ≥ (宽度1 + 宽度2)/2 + 20`。
 
 ## 属性值格式
 - 数字: 直接写数字，如 ""mass"": ""2.5""

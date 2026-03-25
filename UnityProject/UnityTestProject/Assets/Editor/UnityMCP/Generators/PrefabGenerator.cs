@@ -269,6 +269,15 @@ namespace UnityMCP.Generators
                 }
             }
 
+            // 若父节点是 RectTransform（Canvas 等 UI 容器）且当前节点仍是普通 Transform，
+            // 主动替换为 RectTransform，确保 anchoredPosition / sizeDelta 能正确应用。
+            if (parent != null &&
+                parent.GetComponent<RectTransform>() != null &&
+                go.GetComponent<RectTransform>() == null)
+            {
+                go.AddComponent<RectTransform>();
+            }
+
             // 组件添加完毕后再 Apply Transform，确保 Canvas/RectTransform 已就绪
             ApplyTransform(go.transform, desc);
 
