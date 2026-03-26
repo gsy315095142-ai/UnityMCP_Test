@@ -24,6 +24,15 @@ namespace UnityMCP.AI
             _config = config;
         }
 
+        public Task<McpAIResponse> SendWithToolsAsync(
+            System.Collections.Generic.List<string> conversationMessages,
+            string toolsJson)
+        {
+            // Ollama 本地模型暂不支持标准 OpenAI function-calling 协议
+            return System.Threading.Tasks.Task.FromResult(
+                McpAIResponse.Fail("Ollama 服务暂不支持工具调用模式（MCP）。请在设置中切换到 Moonshot / Kimi 等支持 function-calling 的模型。"));
+        }
+
         public Task<AIResponse> SendMessageAsync(string systemPrompt, string userMessage) =>
             SendMessageAsync(systemPrompt, null, userMessage);
 

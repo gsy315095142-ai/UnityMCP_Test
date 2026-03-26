@@ -344,7 +344,21 @@ namespace Game.Generated
 }
 ```
 
-## unity-ops 示例 3：实例化预制体
+## unity-ops 示例 3：创建内置几何体（Primitive）
+用户：在场景里生成 2 个球体，分别放在左右两侧
+**注意：球体是 Unity 内置 Primitive，必须用 createPrimitive，不能用 instantiatePrefab！**
+应输出类似：
+```json
+{
+  ""unityOpsVersion"": 1,
+  ""operations"": [
+    { ""op"": ""createPrimitive"", ""primitiveType"": ""Sphere"", ""name"": ""Sphere_Left"",  ""localPosition"": ""-2,0,0"" },
+    { ""op"": ""createPrimitive"", ""primitiveType"": ""Sphere"", ""name"": ""Sphere_Right"", ""localPosition"": ""2,0,0"" }
+  ]
+}
+```
+
+## unity-ops 示例 4：实例化预制体（只用于工程内已有的 .prefab 文件）
 用户：把 Assets/Prefabs/Generated/Enemy.prefab 实例化到 Combat/Spawns 下，缩放 1.2 倍
 应输出类似：
 ```json
@@ -356,7 +370,7 @@ namespace Game.Generated
 }
 ```
 
-## unity-ops 示例 4：从零在场景中搭建完整 UI（Canvas + 背景面板 + 按钮）
+## unity-ops 示例 5：从零在场景中搭建完整 UI（Canvas + 背景面板 + 按钮）
 用户：在当前场景里创建一个登录界面，有确认和取消两个按钮
 **关键规则**：
 - Button 前必须先 addComponent Image（提供背景）；同一对象上先 Image 后 Button
@@ -397,7 +411,7 @@ namespace Game.Generated
 }
 ```
 
-## unity-ops 示例 5：TMP 文案与 RectTransform 锚点
+## unity-ops 示例 6：TMP 文案与 RectTransform 锚点
 ```json
 {
   ""unityOpsVersion"": 1,
@@ -408,7 +422,7 @@ namespace Game.Generated
 }
 ```
 
-## unity-ops 示例 6：删除物体、开关显示、Layer/Tag、打开场景
+## unity-ops 示例 7：删除物体、开关显示、Layer/Tag、打开场景
 ```json
 {
   ""unityOpsVersion"": 1,
@@ -444,7 +458,7 @@ namespace Game.Generated
 }
 ```
 
-## unity-ops 示例 7：仅保存当前场景（须已为 Assets 下 .unity）
+## unity-ops 示例 8：仅保存当前场景（须已为 Assets 下 .unity）
 用户：帮我把当前场景存一下 / 保存场景
 应输出类似（不要写 C#）：
 ```json
@@ -778,10 +792,11 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 | op | 说明 | 必填字段 |
 |----|------|----------|
 | createEmpty | 新建空 GameObject | name；parentPath 可选（空=场景根） |
+| createPrimitive | 创建内置几何体（**Sphere / Cube / Capsule / Cylinder / Plane / Quad**，不需要 .prefab 文件） | primitiveType（必填）；name 可选；parentPath 可选；位姿字段可选。**⚠️ 球体、立方体等 Primitive 必须用此操作，禁止用 instantiatePrefab 伪造不存在的 .prefab 路径！** |
 | setParent | 修改父节点 | path；newParentPath（或 __selection__）；worldPositionStays 可选 |
 | addComponent | 挂组件 | path；typeName |
 | setTransform | 改本地 Transform | path；localPosition / localEulerAngles / localScale 至少一项，""x,y,z"" |
-| instantiatePrefab | 实例化预制体 | prefabAssetPath（.prefab）；parentPath 可选；位姿字段可选 |
+| instantiatePrefab | 实例化已有 .prefab 资源（**只能用于工程内真实存在的预制体**，不能用来创建球体/立方体等内置几何体） | prefabAssetPath（.prefab）；parentPath 可选；位姿字段可选 |
 | destroy | 销毁场景物体 | path |
 | duplicate | 复制物体 | path；duplicateNewName 可选 |
 | setActive | 显隐 | path；active（bool，默认 true） |
@@ -849,7 +864,8 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
         /// 把当前活动场景的 Hierarchy 树（最多 maxDepth 层、maxNodes 个节点）转为可读文本，
         /// 附带每个节点的**完整层级路径**，供 AI 直接引用，不再猜测。
         /// </summary>
-        private static string BuildSceneHierarchyDump(int maxDepth = 6, int maxNodes = 120)
+        /// <summary>供 MCP 工具执行器直接调用，获取场景层级文本。</summary>
+        public static string BuildSceneHierarchyDump(int maxDepth = 6, int maxNodes = 300)
         {
             var scene = SceneManager.GetActiveScene();
             if (!scene.IsValid())

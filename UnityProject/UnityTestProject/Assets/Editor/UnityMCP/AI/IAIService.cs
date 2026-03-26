@@ -63,6 +63,17 @@ namespace UnityMCP.AI
             string userMessage);
 
         /// <summary>
+        /// 工具调用模式：发送多轮对话（含工具调用历史），返回 AI 本轮的文本回复或工具调用请求。
+        /// </summary>
+        /// <param name="conversationMessages">
+        /// 完整对话历史，每条为原始 JSON 对象字符串（role/content/tool_calls/tool_call_id 等字段）。
+        /// </param>
+        /// <param name="toolsJson">工具定义 JSON 数组（OpenAI function-calling 格式）。</param>
+        Task<McpAIResponse> SendWithToolsAsync(
+            System.Collections.Generic.List<string> conversationMessages,
+            string toolsJson);
+
+        /// <summary>
         /// 测试与 AI 服务的连接是否正常
         /// </summary>
         /// <returns>连接是否成功</returns>

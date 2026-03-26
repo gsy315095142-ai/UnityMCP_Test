@@ -24,13 +24,16 @@ namespace UnityMCP.Tools
     public class SceneOperationDto
     {
         /// <summary>
-        /// 操作类型：createEmpty | setParent | addComponent | setTransform | instantiatePrefab | destroy | duplicate |
+        /// 操作类型：createEmpty | createPrimitive | setParent | addComponent | setTransform | instantiatePrefab | destroy | duplicate |
         /// setActive | setLayer | setTag | openScene | saveScene | setComponentProperty | setRectTransform | setUiText（大小写不敏感，允许下划线）。
         /// </summary>
         public string op = "";
 
-        /// <summary>createEmpty：物体名称</summary>
+        /// <summary>createEmpty / createPrimitive：物体名称</summary>
         public string name = "";
+
+        /// <summary>createPrimitive：Unity PrimitiveType 名称（Cube / Sphere / Capsule / Cylinder / Plane / Quad）。</summary>
+        public string primitiveType = "";
 
         /// <summary>createEmpty / instantiatePrefab：父节点；空=场景根；<c>__selection__</c> 为当前选中</summary>
         public string parentPath = "";

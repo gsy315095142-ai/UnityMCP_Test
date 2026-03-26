@@ -336,6 +336,11 @@ namespace UnityMCP.UI
 
             GUILayout.FlexibleSpace();
 
+            // 当前生效模型名称（右对齐，点击可跳转设置）
+            var modelLabel = BuildModelLabel();
+            if (GUILayout.Button(modelLabel, EditorStyles.toolbarButton, GUILayout.Width(modelLabel.text.Length * 6 + 10)))
+                SettingsWindow.ShowWindow();
+
             if (!_isMinimized)
             {
                 var debugToggle = GUILayout.Toggle(
@@ -357,6 +362,28 @@ namespace UnityMCP.UI
                 ToggleMinimized();
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        /// <summary>构建工具栏中显示的模型标签（名称 + Tooltip）。</summary>
+        private GUIContent BuildModelLabel()
+        {
+            if (_config == null)
+                return new GUIContent("⚙ 未配置", "点击打开 AI 设置");
+
+            var provider  = _config.provider.ToString();
+            var modelName = _config.GetEffectiveModel();
+
+            // 缩短模型名以适应工具栏宽度（超过 20 字符就截断）
+            var displayName = modelName.Length > 20
+                ? modelName.Substring(0, 18) + "…"
+                : modelName;
+
+            // MCP 模式标识（Moonshot/OpenAI 支持 function-calling）
+            var mcpTag = (_config.provider == AIProvider.Moonshot || _config.provider == AIProvider.OpenAI)
+                ? " [MCP]" : "";
+
+            var tooltip = $"服务商：{provider}\n模型：{modelName}{(mcpTag.Length > 0 ? "\n模式：MCP 工具调用" : "\n模式：意图路由（不支持 MCP）")}\n点击打开 AI 设置";
+            return new GUIContent($"⚙ {displayName}{mcpTag}", tooltip);
         }
 
         private int GetToolbarPopupIndex()
@@ -560,53 +587,129 @@ namespace UnityMCP.UI
                 : new Color(0.93f, 0.93f, 0.95f, 1f);
 
             EditorGUILayout.BeginVertical(GUILayout.Width(panelOuterW), GUILayout.ExpandHeight(true));
+
+            // ── 标题栏 ──────────────────────────────────────────────────────────
             var headerRect = EditorGUILayout.GetControlRect(false, 26f);
             EditorGUI.DrawRect(headerRect, headerBg);
             GUI.Label(
                 new Rect(headerRect.x + 8f, headerRect.y + 4f, headerRect.width - 16f, 18f),
                 "API 请求日志",
                 EditorStyles.boldLabel);
+
+            var rev        = AiExchangeDebugLog.Revision;
+            var hasPending = rev != _aiDebugLogRevisionSynced;
+
             EditorGUILayout.BeginHorizontal();
             GUILayout.Space(6f);
             if (GUILayout.Button("清空", EditorStyles.miniButton, GUILayout.Width(44)))
             {
                 AiExchangeDebugLog.Clear();
-                _aiDebugLogRevisionSynced = -1;
+                _debugLogEntryTexts.Clear();
+                _aiDebugLogRevisionSynced = AiExchangeDebugLog.Revision;
                 Repaint();
             }
             if (GUILayout.Button("全部复制", EditorStyles.miniButton, GUILayout.Width(60)))
                 EditorGUIUtility.systemCopyBuffer = AiExchangeDebugLog.GetText();
+
+            // 手动刷新：生成中也可随时按，不影响其他条目的选区
+            var refreshLabel = hasPending ? "⟳ 刷新 ●" : "⟳ 刷新";
+            var refreshStyle = hasPending
+                ? new GUIStyle(EditorStyles.miniButton) { fontStyle = FontStyle.Bold }
+                : EditorStyles.miniButton;
+            if (GUILayout.Button(refreshLabel, refreshStyle, GUILayout.Width(hasPending ? 64 : 52)))
+                SyncDebugLogEntries(AiExchangeDebugLog.GetEntries(), rev);
+
             GUILayout.FlexibleSpace();
             GUILayout.Space(6f);
             EditorGUILayout.EndHorizontal();
-            EditorGUILayout.LabelField("每次调用的 Success / 错误 / 正文长度与预览（可拖选后 Ctrl+C 复制）", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(
+                $"共 {_debugLogEntryTexts.Count} 条  |  生成完成自动刷新，或手动点「刷新」",
+                EditorStyles.miniLabel);
             EditorGUILayout.Space(4f);
 
-            var rev = AiExchangeDebugLog.Revision;
-            if (rev != _aiDebugLogRevisionSynced)
-            {
-                _aiDebugLogPanelText = AiExchangeDebugLog.GetText();
-                if (string.IsNullOrEmpty(_aiDebugLogPanelText))
-                    _aiDebugLogPanelText =
-                        "尚无记录。\n\n发送需求后，此处会追加每次网络返回的摘要，便于排查空内容或解析失败。";
-                _aiDebugLogRevisionSynced = rev;
-            }
+            // 生成中不自动刷新（防止 TextArea 选区被重置）；生成结束后自动同步一次
+            if (hasPending && !_isGenerating)
+                SyncDebugLogEntries(AiExchangeDebugLog.GetEntries(), rev);
 
-            var st = new GUIStyle(EditorStyles.textArea)
+            // ── 条目列表区 ───────────────────────────────────────────────────────
+            var contentW  = Mathf.Max(64f, DebugPanelContentWidth - 12f);
+            var entryStyle = new GUIStyle(EditorStyles.textArea)
             {
                 wordWrap = true,
                 fontSize = 10,
-                richText = false
+                richText = false,
             };
-            var contentW = Mathf.Max(64f, DebugPanelContentWidth - 12f);
-            var h = st.CalcHeight(new GUIContent(_aiDebugLogPanelText), contentW);
-            h = Mathf.Clamp(h, 120f, 120000f);
+            var titleStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                fontStyle  = FontStyle.Bold,
+                clipping   = TextClipping.Clip,
+            };
+
             EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandHeight(true));
             _debugLogScroll = EditorGUILayout.BeginScrollView(_debugLogScroll, GUILayout.ExpandHeight(true));
-            _aiDebugLogPanelText = EditorGUILayout.TextArea(_aiDebugLogPanelText, st, GUILayout.Width(contentW), GUILayout.Height(h));
+
+            if (_debugLogEntryTexts.Count == 0)
+            {
+                EditorGUILayout.LabelField(
+                    "尚无记录。\n发送需求后，此处会追加每次网络返回的摘要，便于排查空内容或解析失败。",
+                    EditorStyles.wordWrappedMiniLabel, GUILayout.Width(contentW));
+            }
+            else
+            {
+                var prevEnabled = GUI.enabled;
+                GUI.enabled = true;
+
+                // 最新的条目排在最上面（倒序显示）
+                for (var i = _debugLogEntryTexts.Count - 1; i >= 0; i--)
+                {
+                    var entry = _debugLogEntryTexts[i];
+
+                    // 提取第一行作为标题（格式：[datetime] phase）
+                    var nlIdx = entry.IndexOf('\n');
+                    var title = nlIdx > 0 ? entry.Substring(0, nlIdx).Trim() : entry.Trim();
+
+                    // 条目标题行：标题 + 序号 + 复制按钮
+                    EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+                    EditorGUILayout.LabelField(title, titleStyle, GUILayout.ExpandWidth(true));
+                    EditorGUILayout.LabelField(
+                        $"#{i + 1}",
+                        EditorStyles.centeredGreyMiniLabel,
+                        GUILayout.Width(28));
+                    if (GUILayout.Button("复制", EditorStyles.miniButton, GUILayout.Width(34)))
+                        EditorGUIUtility.systemCopyBuffer = entry;
+                    EditorGUILayout.EndHorizontal();
+
+                    // 条目正文（可拖选，Ctrl+C 复制）
+                    var h = entryStyle.CalcHeight(new GUIContent(entry), contentW);
+                    h = Mathf.Clamp(h, 20f, 8000f);
+                    _debugLogEntryTexts[i] = EditorGUILayout.TextArea(
+                        _debugLogEntryTexts[i], entryStyle,
+                        GUILayout.Width(contentW), GUILayout.Height(h));
+
+                    EditorGUILayout.Space(6f);
+                }
+
+                GUI.enabled = prevEnabled;
+            }
+
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
             EditorGUILayout.EndVertical();
+        }
+
+        /// <summary>将 AiExchangeDebugLog 的条目列表同步到 _debugLogEntryTexts。
+        /// 采用「只追加」策略：已有条目的 TextArea 状态不受影响。</summary>
+        private void SyncDebugLogEntries(IReadOnlyList<string> entries, int rev)
+        {
+            // 如果来源条目更少（发生了 Clear），全量重建
+            if (entries.Count < _debugLogEntryTexts.Count)
+                _debugLogEntryTexts.Clear();
+
+            // 追加新增的条目
+            for (var i = _debugLogEntryTexts.Count; i < entries.Count; i++)
+                _debugLogEntryTexts.Add(entries[i]);
+
+            _aiDebugLogRevisionSynced = rev;
         }
 
         private void DrawChatHistory()
@@ -795,6 +898,21 @@ namespace UnityMCP.UI
 
             GUI.SetNextControlName("ChatInput");
             _userInput = EditorGUILayout.TextArea(_userInput, GUILayout.Height(60), GUILayout.ExpandWidth(true));
+
+            // 输入框刚获得焦点时 Unity 会全选文本；在下一帧清除选区，只保留光标位置。
+            var inputFocusedNow = GUI.GetNameOfFocusedControl() == "ChatInput";
+            if (inputFocusedNow && !_inputWasFocused)
+            {
+                var kbCtrl = GUIUtility.keyboardControl;
+                EditorApplication.delayCall += () =>
+                {
+                    if (GUIUtility.keyboardControl != kbCtrl) return;
+                    if (GUIUtility.GetStateObject(typeof(TextEditor), kbCtrl) is TextEditor editor)
+                        editor.selectIndex = editor.cursorIndex;
+                    Repaint();
+                };
+            }
+            _inputWasFocused = inputFocusedNow;
 
             if (string.IsNullOrEmpty(_userInput))
             {

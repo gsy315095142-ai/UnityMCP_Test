@@ -52,6 +52,7 @@ namespace UnityMCP.Tools
             return kind switch
             {
                 "createempty" => CheckCreateEmpty(op, scene, root, applySubtreeCap, out summary),
+                "createprimitive" => CheckCreatePrimitive(op, out summary),
                 "setparent" => CheckSetParent(op, scene, root, applySubtreeCap, out summary),
                 "addcomponent" => CheckPathOnly(op.path, "addComponent", scene, root, applySubtreeCap, out summary),
                 "settransform" => CheckPathOnly(op.path, "setTransform", scene, root, applySubtreeCap, out summary),
@@ -118,6 +119,19 @@ namespace UnityMCP.Tools
                 return false;
             }
 
+            return true;
+        }
+
+        private static bool CheckCreatePrimitive(SceneOperationDto op, out string summary)
+        {
+            if (string.IsNullOrWhiteSpace(op.primitiveType))
+            {
+                summary = "createPrimitive: primitiveType 为空（可用值：Cube / Sphere / Capsule / Cylinder / Plane / Quad）。";
+                return false;
+            }
+            summary = $"createPrimitive — {op.primitiveType}" +
+                      (string.IsNullOrWhiteSpace(op.name) ? "" : $"，名称: {op.name}") +
+                      $"，父: {(string.IsNullOrEmpty(op.parentPath) ? "（场景根）" : op.parentPath)}";
             return true;
         }
 
@@ -341,6 +355,9 @@ namespace UnityMCP.Tools
             return kind switch
             {
                 "createempty" => $"createEmpty — 名称: {op.name}, 父: {(string.IsNullOrEmpty(op.parentPath) ? "（场景根）" : op.parentPath)}",
+                "createprimitive" => $"createPrimitive — {op.primitiveType}" +
+                    (string.IsNullOrWhiteSpace(op.name) ? "" : $"，名称: {op.name}") +
+                    $"，父: {(string.IsNullOrEmpty(op.parentPath) ? "（场景根）" : op.parentPath)}",
                 "setparent" => $"setParent — {op.path} → 父: {op.newParentPath}",
                 "addcomponent" => $"addComponent — {op.path} 添加 {op.typeName}",
                 "settransform" => $"setTransform — {op.path}",

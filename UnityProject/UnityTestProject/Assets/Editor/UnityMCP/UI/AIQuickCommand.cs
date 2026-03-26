@@ -36,7 +36,11 @@ namespace UnityMCP.UI
         private bool _showAiDebugPanel;
         private Vector2 _debugLogScroll;
         private int _aiDebugLogRevisionSynced = -1;
-        private string _aiDebugLogPanelText = "";
+        /// <summary>
+        /// 每条日志的 TextArea 显示文本（对应 AiExchangeDebugLog.GetEntries()）。
+        /// 只追加不整体替换，保留现有条目的 TextArea 选区状态。
+        /// </summary>
+        private List<string> _debugLogEntryTexts = new();
         /// <summary>当前帧左侧聊天列可用宽度（开启右侧日志后不含日志列），供气泡 MaxWidth 使用。</summary>
         private float _chatColumnInnerWidth = 600f;
         private AIServiceConfig? _config;
@@ -65,6 +69,9 @@ namespace UnityMCP.UI
 
         /// <summary><see cref="AssetFolderLister"/> 缓存，工程变更时清空。</summary>
         private List<string>? _assetFoldersCache;
+
+        // ── 输入栏焦点追踪（防止获焦时全选）──
+        private bool _inputWasFocused;
 
         // ── 最小化（折叠）──
         private bool _isMinimized;

@@ -109,6 +109,43 @@ namespace UnityMCP.Tools
         }
 
         /// <summary>
+        /// 在场景中创建 Unity 内置 Primitive（Sphere / Cube / Capsule 等），可指定父节点和位姿。
+        /// </summary>
+        public static SceneOperationResult CreatePrimitiveAt(
+            PrimitiveType primitiveType,
+            string name,
+            string? parentPath,
+            Vector3? localPosition = null,
+            Vector3? localEulerAngles = null,
+            Vector3? localScale = null)
+        {
+            var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+            if (!scene.IsValid())
+                return SceneOperationResult.Fail("没有有效的活动场景。");
+
+            var pr = HierarchyLocator.TryResolveParent(parentPath, scene, out var parent);
+            if (!pr.Success) return pr;
+
+            Undo.IncrementCurrentGroup();
+            var groupName = $"Create {primitiveType}";
+            Undo.SetCurrentGroupName(groupName);
+
+            var go = GameObject.CreatePrimitive(primitiveType);
+            go.name = string.IsNullOrWhiteSpace(name) ? primitiveType.ToString() : name;
+            Undo.RegisterCreatedObjectUndo(go, groupName);
+
+            if (parent != null)
+                go.transform.SetParent(parent.transform, false);
+
+            if (localPosition.HasValue) go.transform.localPosition = localPosition.Value;
+            if (localEulerAngles.HasValue) go.transform.localEulerAngles = localEulerAngles.Value;
+            if (localScale.HasValue) go.transform.localScale = localScale.Value;
+
+            Undo.CollapseUndoOperations(Undo.GetCurrentGroup());
+            return SceneOperationResult.Ok(go);
+        }
+
+        /// <summary>
         /// 设置子物体的父节点（本地坐标保持不变由 <paramref name="worldPositionStays"/> 控制，默认 false 与编辑器默认一致）。
         /// </summary>
         public static SceneOperationResult SetParent(GameObject child, GameObject newParent, bool worldPositionStays = false)

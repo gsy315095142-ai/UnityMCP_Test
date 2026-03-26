@@ -152,8 +152,17 @@ namespace UnityMCP.UI
             switch (context.Mode)
             {
                 case GenerateMode.AiJudge:
-                    AddTextBubble("⏳ AI 正在分析需求类型，请稍候...");
-                    ResolveIntentThenExecuteAsync(context);
+                    if (SupportsFunctionCalling(_config))
+                    {
+                        // MCP 工具调用模式：AI 自主决策并通过工具与工程交互
+                        McpGenerateAsync(context);
+                    }
+                    else
+                    {
+                        // 回退：旧的「意图路由 + 专项 AI 调用」流程（适用于不支持 function-calling 的服务）
+                        AddTextBubble("⏳ AI 正在分析需求类型，请稍候...");
+                        ResolveIntentThenExecuteAsync(context);
+                    }
                     break;
                 case GenerateMode.Code:
                     AddTextBubble("⏳ 正在生成代码，请稍候...");
@@ -219,6 +228,21 @@ namespace UnityMCP.UI
             _chatHistory.Add(msg);
             PersistChatHistory();
             ScrollToBottom();
+        }
+
+        /// <summary>
+        /// 判断当前配置的 AI 服务是否支持 OpenAI function-calling（工具调用）协议。
+        /// Ollama 等本地服务默认不支持；Moonshot / OpenAI 兼容服务支持。
+        /// </summary>
+        private static bool SupportsFunctionCalling(AIServiceConfig? config)
+        {
+            if (config == null) return false;
+            return config.provider switch
+            {
+                AIProvider.Moonshot => true,
+                AIProvider.OpenAI   => true,
+                _                   => false   // Ollama、Claude、Azure 等暂未实现
+            };
         }
 
         private static GenerateMode MapRouteToMode(GenerationRoute route, bool combinedPrefabFirst) => route switch

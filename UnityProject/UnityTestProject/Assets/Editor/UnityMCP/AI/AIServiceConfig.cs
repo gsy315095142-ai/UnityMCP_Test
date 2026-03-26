@@ -61,22 +61,39 @@ namespace UnityMCP.AI
         private const string API_KEY_PREFS_KEY = "UnityMCP_APIKey_Encrypted";
 
         /// <summary>
-        /// 根据当前选择的服务商返回默认端点
+        /// 根据当前选择的服务商返回有效的 API 端点。
+        /// 若 customEndpoint 明显属于其他服务商（如 Ollama 地址用在 Moonshot），则忽略并使用 provider 默认值。
         /// </summary>
         public string GetEffectiveEndpoint()
         {
-            if (!string.IsNullOrEmpty(customEndpoint))
-                return customEndpoint;
-
-            return provider switch
+            var defaultForProvider = provider switch
             {
-                AIProvider.Ollama => "http://localhost:11434",
-                AIProvider.OpenAI => "https://api.openai.com/v1",
-                AIProvider.Claude => "https://api.anthropic.com",
-                AIProvider.Azure => "",
-                AIProvider.Moonshot => MoonshotOpenAiService.DefaultBaseUrl,
-                _ => ""
+                AIProvider.Ollama    => "",                              // Ollama 端点因人而异，不设全局默认
+                AIProvider.OpenAI    => "https://api.openai.com/v1",
+                AIProvider.Claude    => "https://api.anthropic.com",
+                AIProvider.Azure     => "",
+                AIProvider.Moonshot  => MoonshotOpenAiService.DefaultBaseUrl,
+                _                    => ""
             };
+
+            if (string.IsNullOrEmpty(customEndpoint))
+                return defaultForProvider;
+
+            // 防止用 Ollama 地址（http://...） 误用于 Moonshot / OpenAI（https://...api）
+            // 规则：如果当前 provider 是云端服务但 customEndpoint 明显是本地地址，优先用 provider 默认值
+            bool customIsLocal = customEndpoint.Contains("localhost") ||
+                                 customEndpoint.Contains("127.0.0.1") ||
+                                 (customEndpoint.StartsWith("http://") &&
+                                  !customEndpoint.StartsWith("http://api."));
+
+            bool providerIsCloud = provider == AIProvider.Moonshot ||
+                                   provider == AIProvider.OpenAI   ||
+                                   provider == AIProvider.Claude;
+
+            if (providerIsCloud && customIsLocal && !string.IsNullOrEmpty(defaultForProvider))
+                return defaultForProvider;
+
+            return customEndpoint;
         }
 
         /// <summary>

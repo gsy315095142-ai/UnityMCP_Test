@@ -624,6 +624,18 @@ namespace UnityMCP.UI
         private void DrawSuccessState(ChatMessage msg)
         {
             var tw = AssistantBubbleTextWidth();
+
+            // MCP 工具调用模式：直接展示 AI 回复文本
+            if (msg.Mode == GenerateMode.AiJudge)
+            {
+                if (!string.IsNullOrWhiteSpace(msg.Content))
+                    DrawSelectableLabel(msg.Content, _assistantBubbleStyle!, tw);
+                if (msg.GenerationTime > 0 || msg.TokensUsed > 0)
+                    DrawSelectableLabel($"耗时: {msg.GenerationTime:F1}秒 | Token: {msg.TokensUsed}",
+                        EditorStyles.miniLabel, tw);
+                return;
+            }
+
             string text = msg.Mode switch
             {
                 GenerateMode.SceneOps => "🎉 场景操控执行成功！",

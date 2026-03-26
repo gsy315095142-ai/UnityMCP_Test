@@ -130,9 +130,21 @@ namespace UnityMCP.UI
                     if (!string.IsNullOrEmpty(m.SavedPrefabPath))
                         sb.Append(" 预制体: ").Append(m.SavedPrefabPath);
                     if (m.Mode == GenerateMode.SceneOps)
-                        sb.Append($" 场景操控已执行 {m.SceneOpsExecutedStepCount} 步。");
+                    {
+                        sb.Append($" 场景操控已成功执行 {m.SceneOpsExecutedStepCount} 步");
+                        var detail = SummarizeSceneOpsEnvelope(m.SceneOpsEnvelope);
+                        if (!string.IsNullOrWhiteSpace(detail) && detail != "（无步骤）")
+                            sb.Append("：").Append(detail);
+                        sb.Append('。');
+                    }
                     if (m.Mode == GenerateMode.AssetOps)
-                        sb.Append($" 资源整理已执行 {m.AssetOpsExecutedStepCount} 步。");
+                    {
+                        sb.Append($" 资源整理已成功执行 {m.AssetOpsExecutedStepCount} 步");
+                        var detail = SummarizeAssetOpsEnvelope(m.AssetOpsEnvelope);
+                        if (!string.IsNullOrWhiteSpace(detail) && detail != "（无步骤）")
+                            sb.Append("：").Append(detail);
+                        sb.Append('。');
+                    }
                     return sb.ToString();
                 }
                 case MessageTypeEnum.Error:
@@ -146,8 +158,12 @@ namespace UnityMCP.UI
         {
             if (env?.operations == null || env.operations.Length == 0)
                 return "（无步骤）";
-            var parts = env.operations
-                .Select(o => string.IsNullOrWhiteSpace(o.op) ? "?" : o.op.Trim());
+            var parts = env.operations.Select(o =>
+            {
+                var op   = string.IsNullOrWhiteSpace(o.op)   ? "?" : o.op.Trim();
+                var path = string.IsNullOrWhiteSpace(o.path) ? ""  : $"({o.path.Trim()})";
+                return op + path;
+            });
             return string.Join(" → ", parts);
         }
 
@@ -155,8 +171,12 @@ namespace UnityMCP.UI
         {
             if (env?.operations == null || env.operations.Length == 0)
                 return "（无步骤）";
-            var parts = env.operations
-                .Select(o => string.IsNullOrWhiteSpace(o.op) ? "?" : o.op.Trim());
+            var parts = env.operations.Select(o =>
+            {
+                var op   = string.IsNullOrWhiteSpace(o.op)   ? "?" : o.op.Trim();
+                var path = string.IsNullOrWhiteSpace(o.path) ? ""  : $"({o.path.Trim()})";
+                return op + path;
+            });
             return string.Join(" → ", parts);
         }
 

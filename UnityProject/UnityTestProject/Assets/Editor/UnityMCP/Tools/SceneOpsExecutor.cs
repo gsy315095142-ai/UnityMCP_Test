@@ -73,6 +73,7 @@ namespace UnityMCP.Tools
             return kind switch
             {
                 "createempty" => ExecCreateEmpty(op, scene),
+                "createprimitive" => ExecCreatePrimitive(op, scene),
                 "setparent" => ExecSetParent(op, scene),
                 "addcomponent" => ExecAddComponent(op),
                 "settransform" => ExecSetTransform(op),
@@ -154,6 +155,24 @@ namespace UnityMCP.Tools
                 pos,
                 euler,
                 scale);
+        }
+
+        private static SceneOperationResult ExecCreatePrimitive(SceneOperationDto op, Scene scene)
+        {
+            if (string.IsNullOrWhiteSpace(op.primitiveType))
+                return SceneOperationResult.Fail("createPrimitive 需要 primitiveType（Cube / Sphere / Capsule / Cylinder / Plane / Quad）");
+
+            if (!System.Enum.TryParse<PrimitiveType>(op.primitiveType.Trim(), true, out var pt))
+                return SceneOperationResult.Fail(
+                    $"无法识别 primitiveType \"{op.primitiveType}\"，可用值：Cube、Sphere、Capsule、Cylinder、Plane、Quad");
+
+            var objName  = string.IsNullOrWhiteSpace(op.name) ? op.primitiveType.Trim() : op.name.Trim();
+            var parentPath = string.IsNullOrWhiteSpace(op.parentPath) ? null : op.parentPath.Trim();
+            var pos   = SceneOpsVectorParser.TryParseVector3(op.localPosition);
+            var euler = SceneOpsVectorParser.TryParseVector3(op.localEulerAngles);
+            var scale = SceneOpsVectorParser.TryParseVector3(op.localScale);
+
+            return SceneEditorTools.CreatePrimitiveAt(pt, objName, parentPath, pos, euler, scale);
         }
 
         private static SceneOperationResult ExecInstantiatePrefab(SceneOperationDto op, Scene scene)
