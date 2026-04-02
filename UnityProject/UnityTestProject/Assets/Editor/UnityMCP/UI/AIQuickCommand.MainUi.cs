@@ -196,7 +196,7 @@ namespace UnityMCP.UI
             EditorGUILayout.EndVertical();
             if (!_isMinimized && _showAiDebugPanel)
             {
-                DrawChatDebugColumnSeparator();
+                DrawDebugPanelSplitter();
                 DrawAiDebugSidePanel();
             }
             EditorGUILayout.EndHorizontal();
@@ -233,15 +233,15 @@ namespace UnityMCP.UI
             Repaint();
         }
 
-        private const float DebugPanelContentWidth = 276f;
-        private const float MainColumnGutter = 12f;
+        private const float DebugPanelMinWidth   = 160f;
+        private const float DebugPanelMaxWidth   = 800f;
+        private const float SplitterGutterWidth  = 10f;   // 拖拽热区宽度
+        private static readonly int SplitterCtrlId =
+            "UnityMCP.DebugPanelSplitter".GetHashCode();
 
-        /// <summary>右侧日志列占用的水平宽度（与 DrawAiDebugSidePanel + 分隔条一致，用于加宽窗口）。</summary>
-        private static float DebugPanelTotalHorizontalWidth()
-        {
-            var panelOuter = DebugPanelContentWidth + 8f;
-            return MainColumnGutter + panelOuter;
-        }
+        /// <summary>右侧日志列占用的水平宽度（面板外框 + 分割条），用于加/减宽窗口。</summary>
+        private float DebugPanelTotalHorizontalWidth() =>
+            SplitterGutterWidth + _debugPanelWidth + 8f;
 
         /// <summary>打开/关闭 API 日志时加宽或收回窗口，使左侧聊天区宽度与打开前一致。</summary>
         private void SetShowAiDebugPanel(bool show)
@@ -272,28 +272,64 @@ namespace UnityMCP.UI
         {
             const float hPad = 10f;
             var full = Mathf.Max(position.width, minSize.x);
-            if (_showAiDebugPanel)
-            {
-                _chatColumnInnerWidth = Mathf.Max(
-                    260f,
-                    full - hPad * 2 - DebugPanelTotalHorizontalWidth());
-            }
-            else
-            {
-                _chatColumnInnerWidth = Mathf.Max(260f, full - hPad * 2);
-            }
+            _chatColumnInnerWidth = _showAiDebugPanel
+                ? Mathf.Max(260f, full - hPad * 2 - DebugPanelTotalHorizontalWidth())
+                : Mathf.Max(260f, full - hPad * 2);
         }
 
-        private void DrawChatDebugColumnSeparator()
+        /// <summary>
+        /// 在聊天列与日志列之间绘制可拖拽的分割条。
+        /// 拖动时实时更新 _debugPanelWidth，宽度夹在 [DebugPanelMinWidth, DebugPanelMaxWidth] 之间。
+        /// </summary>
+        private void DrawDebugPanelSplitter()
         {
-            var r = GUILayoutUtility.GetRect(MainColumnGutter, 1f, GUILayout.ExpandHeight(true));
-            var h = r.height > 4f ? r.height : Mathf.Max(100f, position.height - 140f);
-            var y0 = r.yMin;
-            var lineX = r.x + MainColumnGutter * 0.5f - 0.5f;
-            var col = EditorGUIUtility.isProSkin
-                ? new Color(1f, 1f, 1f, 0.14f)
-                : new Color(0f, 0f, 0f, 0.12f);
-            EditorGUI.DrawRect(new Rect(lineX, y0, 1f, h), col);
+            var r = GUILayoutUtility.GetRect(SplitterGutterWidth, 1f, GUILayout.ExpandHeight(true));
+
+            // 分割线视觉
+            var lineCol = EditorGUIUtility.isProSkin
+                ? new Color(1f, 1f, 1f, 0.18f)
+                : new Color(0f, 0f, 0f, 0.14f);
+            EditorGUI.DrawRect(
+                new Rect(r.x + r.width * 0.5f - 0.5f, r.yMin, 1f, r.height), lineCol);
+
+            // 鼠标悬停时显示水平缩放光标
+            EditorGUIUtility.AddCursorRect(r, MouseCursor.ResizeHorizontal);
+
+            var evt = Event.current;
+            switch (evt.type)
+            {
+                case EventType.MouseDown:
+                    if (evt.button == 0 && r.Contains(evt.mousePosition))
+                    {
+                        GUIUtility.hotControl = SplitterCtrlId;
+                        evt.Use();
+                    }
+                    break;
+
+                case EventType.MouseDrag:
+                    if (GUIUtility.hotControl == SplitterCtrlId)
+                    {
+                        // 向右拖 → 日志面板变窄；向左拖 → 日志面板变宽
+                        _debugPanelWidth = Mathf.Clamp(
+                            _debugPanelWidth - evt.delta.x,
+                            DebugPanelMinWidth,
+                            Mathf.Min(DebugPanelMaxWidth, position.width - 420f));
+                        ApplyChatColumnWidthForCurrentLayout();
+                        evt.Use();
+                        Repaint();
+                    }
+                    break;
+
+                case EventType.MouseUp:
+                    if (GUIUtility.hotControl == SplitterCtrlId)
+                    {
+                        GUIUtility.hotControl = 0;
+                        // 拖拽结束立即持久化
+                        EditorPrefs.SetFloat(DebugPanelWidthPrefKey, _debugPanelWidth);
+                        evt.Use();
+                    }
+                    break;
+            }
         }
 
         private void DrawToolbar()
@@ -581,7 +617,7 @@ namespace UnityMCP.UI
 
         private void DrawAiDebugSidePanel()
         {
-            var panelOuterW = DebugPanelContentWidth + 8f;
+            var panelOuterW = _debugPanelWidth + 8f;
             var headerBg = EditorGUIUtility.isProSkin
                 ? new Color(0.22f, 0.22f, 0.24f, 0.95f)
                 : new Color(0.93f, 0.93f, 0.95f, 1f);
@@ -632,7 +668,7 @@ namespace UnityMCP.UI
                 SyncDebugLogEntries(AiExchangeDebugLog.GetEntries(), rev);
 
             // ── 条目列表区 ───────────────────────────────────────────────────────
-            var contentW  = Mathf.Max(64f, DebugPanelContentWidth - 12f);
+            var contentW  = Mathf.Max(64f, _debugPanelWidth - 12f);
             var entryStyle = new GUIStyle(EditorStyles.textArea)
             {
                 wordWrap = true,
@@ -669,13 +705,20 @@ namespace UnityMCP.UI
                     var title = nlIdx > 0 ? entry.Substring(0, nlIdx).Trim() : entry.Trim();
 
                     // 条目标题行：标题 + 序号 + 复制按钮
-                    EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-                    EditorGUILayout.LabelField(title, titleStyle, GUILayout.ExpandWidth(true));
+                    // 固定行宽 = contentW，防止 ScrollView 内部水平无界导致按钮被挤出
+                    const float kNumW  = 28f;
+                    const float kCopyW = 36f;
+                    const float kPad   = 8f;
+                    var titleMaxW = Mathf.Max(20f, contentW - kNumW - kCopyW - kPad);
+                    EditorGUILayout.BeginHorizontal(EditorStyles.toolbar, GUILayout.Width(contentW));
+                    EditorGUILayout.LabelField(title, titleStyle,
+                        GUILayout.MinWidth(20f), GUILayout.MaxWidth(titleMaxW));
+                    GUILayout.FlexibleSpace();
                     EditorGUILayout.LabelField(
                         $"#{i + 1}",
                         EditorStyles.centeredGreyMiniLabel,
-                        GUILayout.Width(28));
-                    if (GUILayout.Button("复制", EditorStyles.miniButton, GUILayout.Width(34)))
+                        GUILayout.Width(kNumW));
+                    if (GUILayout.Button("复制", EditorStyles.miniButton, GUILayout.Width(kCopyW)))
                         EditorGUIUtility.systemCopyBuffer = entry;
                     EditorGUILayout.EndHorizontal();
 

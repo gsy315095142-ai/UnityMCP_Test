@@ -34,6 +34,8 @@ namespace UnityMCP.UI
         private Vector2 _chatScrollPos;
         /// <summary>是否在窗口右侧追加「API 日志」列（为 true 时加宽窗口，不压缩聊天列）。</summary>
         private bool _showAiDebugPanel;
+        /// <summary>API 日志面板内容区宽度（可拖拽调整，通过 EditorPrefs 持久化）。</summary>
+        private float _debugPanelWidth = 276f;
         private Vector2 _debugLogScroll;
         private int _aiDebugLogRevisionSynced = -1;
         /// <summary>
@@ -94,18 +96,22 @@ namespace UnityMCP.UI
             window.Focus();
         }
 
+        private const string DebugPanelWidthPrefKey = "UnityMCP.DebugPanelWidth";
+
         private void OnEnable()
         {
             titleContent = new GUIContent(LumiAIProductInfo.WindowTitleWithVersion);
             _config = AIServiceConfig.Load();
             if (!TryRestoreChatHistory())
                 _chatHistory.Clear();
+            _debugPanelWidth = EditorPrefs.GetFloat(DebugPanelWidthPrefKey, 276f);
             EditorApplication.projectChanged += InvalidateAssetFoldersCache;
         }
 
         private void OnDisable()
         {
             PersistChatHistory();
+            EditorPrefs.SetFloat(DebugPanelWidthPrefKey, _debugPanelWidth);
             EditorApplication.update -= OnCompileWaitUpdate;
             EditorApplication.projectChanged -= InvalidateAssetFoldersCache;
         }
