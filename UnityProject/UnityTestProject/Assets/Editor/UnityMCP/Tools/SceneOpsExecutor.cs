@@ -88,6 +88,7 @@ namespace UnityMCP.Tools
                 "setcomponentproperty" => ExecSetComponentProperty(op),
                 "setrecttransform" => ExecSetRectTransform(op),
                 "setuitext" => ExecSetUiText(op),
+                "setsiblingindex" => ExecSetSiblingIndex(op),
                 _ => SceneOperationResult.Fail($"未知操作: {op.op}")
             };
         }
@@ -297,6 +298,13 @@ namespace UnityMCP.Tools
             if (string.IsNullOrWhiteSpace(op.path))
                 return SceneOperationResult.Fail("setUiText 需要 path");
             return SceneEditorTools.SetUiTextByHierarchyPath(op.path.Trim(), op.uiText ?? "");
+        }
+
+        private static SceneOperationResult ExecSetSiblingIndex(SceneOperationDto op)
+        {
+            if (string.IsNullOrWhiteSpace(op.path))
+                return SceneOperationResult.Fail("setSiblingIndex 需要 path");
+            return SceneEditorTools.SetSiblingIndexByHierarchyPath(op.path.Trim(), op.siblingIndex);
         }
     }
 }

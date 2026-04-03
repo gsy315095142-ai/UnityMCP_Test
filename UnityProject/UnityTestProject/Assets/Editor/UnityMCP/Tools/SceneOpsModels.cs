@@ -25,7 +25,8 @@ namespace UnityMCP.Tools
     {
         /// <summary>
         /// 操作类型：createEmpty | createPrimitive | setParent | addComponent | setTransform | instantiatePrefab | destroy | duplicate |
-        /// setActive | setLayer | setTag | openScene | saveScene | setComponentProperty | setRectTransform | setUiText（大小写不敏感，允许下划线）。
+        /// setActive | setLayer | setTag | openScene | saveScene | setComponentProperty | setRectTransform | setUiText | setSiblingIndex
+        /// （大小写不敏感，允许下划线）。
         /// </summary>
         public string op = "";
 
@@ -38,7 +39,7 @@ namespace UnityMCP.Tools
         /// <summary>createEmpty / instantiatePrefab：父节点；空=场景根；<c>__selection__</c> 为当前选中</summary>
         public string parentPath = "";
 
-        /// <summary>setParent / addComponent / setTransform：目标物体层级路径</summary>
+        /// <summary>setParent / addComponent / setTransform / setSiblingIndex：目标物体层级路径</summary>
         public string path = "";
 
         /// <summary>setParent：新父节点层级路径或 <c>__selection__</c></summary>
@@ -104,6 +105,9 @@ namespace UnityMCP.Tools
 
         /// <summary>setUiText：目标物体上 Unity UI Text 或 TMP 的显示文本。</summary>
         public string uiText = "";
+
+        /// <summary>setSiblingIndex：目标物体在其父节点子列表中的新排序索引（0 = 最前面）。</summary>
+        public int siblingIndex = 0;
     }
 
     /// <summary>解析 <see cref="SceneOpsEnvelopeDto"/> 的结果</summary>

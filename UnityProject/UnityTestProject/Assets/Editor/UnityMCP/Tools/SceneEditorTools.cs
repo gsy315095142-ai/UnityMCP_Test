@@ -405,6 +405,28 @@ namespace UnityMCP.Tools
             return SceneOperationResult.Ok(go);
         }
 
+        /// <summary>
+        /// 设置物体在其父节点子列表中的排序索引。index=0 表示移到最前面。
+        /// </summary>
+        public static SceneOperationResult SetSiblingIndexByHierarchyPath(string hierarchyPath, int index)
+        {
+            var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
+            if (go == null)
+                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+
+            var parent = go.transform.parent;
+            if (parent == null)
+                return SceneOperationResult.Fail($"物体 \"{hierarchyPath}\" 没有父节点，无法设置 SiblingIndex。");
+
+            if (index < 0 || index > parent.childCount - 1)
+                return SceneOperationResult.Fail(
+                    $"siblingIndex 超出范围：{index}，父节点共有 {parent.childCount} 个子物体（有效范围 0~{parent.childCount - 1}）。");
+
+            Undo.RecordObject(go.transform, "Set SiblingIndex");
+            go.transform.SetSiblingIndex(index);
+            return SceneOperationResult.Ok(go);
+        }
+
         public static SceneOperationResult SetLayerByHierarchyPath(string hierarchyPath, int layerIndex, string? layerName)
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
