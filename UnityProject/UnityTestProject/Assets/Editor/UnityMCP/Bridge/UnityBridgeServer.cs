@@ -48,11 +48,14 @@ namespace UnityMCP.Bridge
         {
             AssemblyReloadEvents.beforeAssemblyReload += Stop;
             EditorApplication.quitting += Stop;
-
-            var autoStart = EditorPrefs.GetBool(AutoStartPrefKey, true);
-            EnsureTokenInitialized();
-            if (autoStart)
-                Start();
+            // Defer prefs access to editor main loop.
+            EditorApplication.delayCall += () =>
+            {
+                var autoStart = GetPrefBool(AutoStartPrefKey, true);
+                EnsureTokenInitialized();
+                if (autoStart)
+                    Start();
+            };
         }
 
         [MenuItem("Window/AI 助手/Unity Bridge/启动", priority = 210)]
@@ -71,15 +74,15 @@ namespace UnityMCP.Bridge
         [MenuItem("Window/AI 助手/Unity Bridge/自动启动", priority = 220)]
         private static void ToggleAutoStart()
         {
-            var value = !EditorPrefs.GetBool(AutoStartPrefKey, true);
-            EditorPrefs.SetBool(AutoStartPrefKey, value);
+            var value = !GetPrefBool(AutoStartPrefKey, true);
+            SetPrefBool(AutoStartPrefKey, value);
         }
 
         [MenuItem("Window/AI 助手/Unity Bridge/启用 Token 鉴权", priority = 221)]
         private static void ToggleTokenAuth()
         {
-            var enabled = !EditorPrefs.GetBool(TokenEnabledPrefKey, false);
-            EditorPrefs.SetBool(TokenEnabledPrefKey, enabled);
+            var enabled = !GetPrefBool(TokenEnabledPrefKey, false);
+            SetPrefBool(TokenEnabledPrefKey, enabled);
             EnsureTokenInitialized();
             Debug.Log(enabled
                 ? "[UnityBridge] Token 鉴权已启用"
@@ -98,7 +101,7 @@ namespace UnityMCP.Bridge
         private static void MenuRegenerateToken()
         {
             var token = GenerateToken();
-            EditorPrefs.SetString(TokenPrefKey, token);
+            SetPrefString(TokenPrefKey, token);
             EditorGUIUtility.systemCopyBuffer = token;
             Debug.Log("[UnityBridge] Token 已重新生成并复制。");
         }
@@ -106,8 +109,8 @@ namespace UnityMCP.Bridge
         [MenuItem("Window/AI 助手/Unity Bridge/高风险操作需确认", priority = 224)]
         private static void ToggleDangerConfirm()
         {
-            var enabled = !EditorPrefs.GetBool(DangerConfirmPrefKey, true);
-            EditorPrefs.SetBool(DangerConfirmPrefKey, enabled);
+            var enabled = !GetPrefBool(DangerConfirmPrefKey, true);
+            SetPrefBool(DangerConfirmPrefKey, enabled);
             Debug.Log(enabled
                 ? "[UnityBridge] 高风险操作确认已启用"
                 : "[UnityBridge] 高风险操作确认已关闭");
@@ -116,21 +119,21 @@ namespace UnityMCP.Bridge
         [MenuItem("Window/AI 助手/Unity Bridge/自动启动", true)]
         private static bool ValidateToggleAutoStart()
         {
-            Menu.SetChecked("Window/AI 助手/Unity Bridge/自动启动", EditorPrefs.GetBool(AutoStartPrefKey, true));
+            Menu.SetChecked("Window/AI 助手/Unity Bridge/自动启动", GetPrefBool(AutoStartPrefKey, true));
             return true;
         }
 
         [MenuItem("Window/AI 助手/Unity Bridge/启用 Token 鉴权", true)]
         private static bool ValidateToggleTokenAuth()
         {
-            Menu.SetChecked("Window/AI 助手/Unity Bridge/启用 Token 鉴权", EditorPrefs.GetBool(TokenEnabledPrefKey, false));
+            Menu.SetChecked("Window/AI 助手/Unity Bridge/启用 Token 鉴权", GetPrefBool(TokenEnabledPrefKey, false));
             return true;
         }
 
         [MenuItem("Window/AI 助手/Unity Bridge/高风险操作需确认", true)]
         private static bool ValidateToggleDangerConfirm()
         {
-            Menu.SetChecked("Window/AI 助手/Unity Bridge/高风险操作需确认", EditorPrefs.GetBool(DangerConfirmPrefKey, true));
+            Menu.SetChecked("Window/AI 助手/Unity Bridge/高风险操作需确认", GetPrefBool(DangerConfirmPrefKey, true));
             return true;
         }
 
@@ -159,7 +162,7 @@ namespace UnityMCP.Bridge
 
         internal static string GetBaseUrl()
         {
-            var port = EditorPrefs.GetInt(PortPrefKey, DefaultPort);
+            var port = GetPrefInt(PortPrefKey, DefaultPort);
             if (port <= 0) port = DefaultPort;
             return $"http://{Host}:{port}";
         }
@@ -173,7 +176,7 @@ namespace UnityMCP.Bridge
 
                 try
                 {
-                    var port = EditorPrefs.GetInt(PortPrefKey, DefaultPort);
+                    var port = GetPrefInt(PortPrefKey, DefaultPort);
                     if (port <= 0) port = DefaultPort;
 
                     var prefix = $"http://{Host}:{port}/";
@@ -313,7 +316,7 @@ namespace UnityMCP.Bridge
                 + "\"bridgeStatus\":\"up\","
                 + "\"unityStatus\":\"connected\","
                 + "\"mode\":\"bridge\","
-                + "\"isPlaying\":" + (EditorApplication.isPlaying ? "true" : "false")
+                + "\"isPlaying\":" + (MainThread.Run(() => EditorApplication.isPlaying) ? "true" : "false")
                 + "}";
             WriteOk(ctx, dataJson, "");
         }
@@ -335,7 +338,7 @@ namespace UnityMCP.Bridge
                        + "\"projectName\":" + JsonEscaper.Q(projectName) + ","
                        + "\"availableToolCount\":" + available + ","
                        + "\"baseUrl\":" + JsonEscaper.Q(GetBaseUrl()) + ","
-                       + "\"tokenAuthEnabled\":" + (EditorPrefs.GetBool(TokenEnabledPrefKey, false) ? "true" : "false") + ","
+                       + "\"tokenAuthEnabled\":" + (GetPrefBool(TokenEnabledPrefKey, false) ? "true" : "false") + ","
                        + "\"mode\":\"bridge\""
                        + "}";
             });
@@ -418,7 +421,7 @@ namespace UnityMCP.Bridge
             var confirmed = JsonFieldReader.ExtractBool(body, "confirm")
                             || JsonFieldReader.ExtractBool(argsJson, "confirm");
             Debug.Log($"[UnityBridge] requestId={requestId} tool={tool} canonicalTool={canonicalTool} received");
-            if (EditorPrefs.GetBool(DangerConfirmPrefKey, true)
+            if (GetPrefBool(DangerConfirmPrefKey, true)
                 && UnityBridgeDispatcher.IsDangerousToolCall(canonicalTool, argsJson, out var dangerReason)
                 && !confirmed)
             {
@@ -548,8 +551,8 @@ namespace UnityMCP.Bridge
                 sb.Append("\"name\":\"unity-bridge\",");
                 sb.Append("\"version\":\"0.1.1\",");
                 sb.Append("\"baseUrl\":").Append(JsonEscaper.Q(GetBaseUrl())).Append(",");
-                sb.Append("\"tokenAuthEnabled\":").Append(EditorPrefs.GetBool(TokenEnabledPrefKey, false) ? "true" : "false").Append(",");
-                sb.Append("\"dangerConfirmEnabled\":").Append(EditorPrefs.GetBool(DangerConfirmPrefKey, true) ? "true" : "false").Append(",");
+                sb.Append("\"tokenAuthEnabled\":").Append(GetPrefBool(TokenEnabledPrefKey, false) ? "true" : "false").Append(",");
+                sb.Append("\"dangerConfirmEnabled\":").Append(GetPrefBool(DangerConfirmPrefKey, true) ? "true" : "false").Append(",");
                 sb.Append("\"routes\":[");
                 sb.Append("{\"method\":\"GET\",\"path\":\"/health\"},");
                 sb.Append("{\"method\":\"GET\",\"path\":\"/unity/info\"},");
@@ -611,8 +614,8 @@ namespace UnityMCP.Bridge
                 sb.Append("{");
                 sb.Append("\"serverRunning\":").Append(IsRunning ? "true" : "false").Append(",");
                 sb.Append("\"baseUrl\":").Append(JsonEscaper.Q(GetBaseUrl())).Append(",");
-                sb.Append("\"tokenAuthEnabled\":").Append(EditorPrefs.GetBool(TokenEnabledPrefKey, false) ? "true" : "false").Append(",");
-                sb.Append("\"dangerConfirmEnabled\":").Append(EditorPrefs.GetBool(DangerConfirmPrefKey, true) ? "true" : "false").Append(",");
+                sb.Append("\"tokenAuthEnabled\":").Append(GetPrefBool(TokenEnabledPrefKey, false) ? "true" : "false").Append(",");
+                sb.Append("\"dangerConfirmEnabled\":").Append(GetPrefBool(DangerConfirmPrefKey, true) ? "true" : "false").Append(",");
                 sb.Append("\"counters\":{");
                 sb.Append("\"totalRequests\":").Append(_totalRequests).Append(",");
                 sb.Append("\"totalToolCalls\":").Append(_totalToolCalls).Append(",");
@@ -632,7 +635,7 @@ namespace UnityMCP.Bridge
 
         private static bool RequiresTokenAuth(string path)
         {
-            if (!EditorPrefs.GetBool(TokenEnabledPrefKey, false))
+            if (!GetPrefBool(TokenEnabledPrefKey, false))
                 return false;
             return !string.Equals(path, "/health", StringComparison.OrdinalIgnoreCase);
         }
@@ -648,19 +651,19 @@ namespace UnityMCP.Bridge
 
         private static void EnsureTokenInitialized()
         {
-            if (!EditorPrefs.GetBool(TokenEnabledPrefKey, false))
+            if (!GetPrefBool(TokenEnabledPrefKey, false))
                 return;
-            if (string.IsNullOrWhiteSpace(EditorPrefs.GetString(TokenPrefKey, "")))
-                EditorPrefs.SetString(TokenPrefKey, GenerateToken());
+            if (string.IsNullOrWhiteSpace(GetPrefString(TokenPrefKey, "")))
+                SetPrefString(TokenPrefKey, GenerateToken());
         }
 
         private static string GetToken()
         {
-            var token = EditorPrefs.GetString(TokenPrefKey, "");
+            var token = GetPrefString(TokenPrefKey, "");
             if (!string.IsNullOrWhiteSpace(token))
                 return token;
             token = GenerateToken();
-            EditorPrefs.SetString(TokenPrefKey, token);
+            SetPrefString(TokenPrefKey, token);
             return token;
         }
 
@@ -750,6 +753,36 @@ namespace UnityMCP.Bridge
             if (!string.IsNullOrWhiteSpace(requestId))
                 return requestId.Trim();
             return Guid.NewGuid().ToString("D");
+        }
+
+        private static bool GetPrefBool(string key, bool defaultValue)
+        {
+            if (MainThread.IsMainThread) return EditorPrefs.GetBool(key, defaultValue);
+            return MainThread.Run(() => EditorPrefs.GetBool(key, defaultValue));
+        }
+
+        private static int GetPrefInt(string key, int defaultValue)
+        {
+            if (MainThread.IsMainThread) return EditorPrefs.GetInt(key, defaultValue);
+            return MainThread.Run(() => EditorPrefs.GetInt(key, defaultValue));
+        }
+
+        private static string GetPrefString(string key, string defaultValue)
+        {
+            if (MainThread.IsMainThread) return EditorPrefs.GetString(key, defaultValue);
+            return MainThread.Run(() => EditorPrefs.GetString(key, defaultValue));
+        }
+
+        private static void SetPrefBool(string key, bool value)
+        {
+            if (MainThread.IsMainThread) { EditorPrefs.SetBool(key, value); return; }
+            MainThread.Run(() => EditorPrefs.SetBool(key, value));
+        }
+
+        private static void SetPrefString(string key, string value)
+        {
+            if (MainThread.IsMainThread) { EditorPrefs.SetString(key, value); return; }
+            MainThread.Run(() => EditorPrefs.SetString(key, value));
         }
     }
 }

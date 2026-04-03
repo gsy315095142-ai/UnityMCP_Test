@@ -96,7 +96,16 @@ namespace UnityMCP.Tools
         {
             if (string.IsNullOrWhiteSpace(raw))
                 return "";
-            return raw.Trim().ToLowerInvariant().Replace("_", "");
+            var kind = raw.Trim().ToLowerInvariant().Replace("_", "");
+
+            // 兼容外部客户端常见别名：delete/remove 统一视为 destroy（删除场景中的 GameObject）。
+            // 注意：删除 Project 资源仍应使用 delete_assets（走 AssetDatabase）。
+            return kind switch
+            {
+                "delete" => "destroy",
+                "remove" => "destroy",
+                _ => kind
+            };
         }
 
         private static SceneOperationResult ExecCreateEmpty(SceneOperationDto op, Scene scene)

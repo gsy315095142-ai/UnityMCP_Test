@@ -521,7 +521,8 @@ namespace UnityMCP.Tools
             try
             {
                 using var so = new SerializedObject(comp);
-                var prop = so.FindProperty(serializedPropertyPath.Trim());
+                var requestedPath = serializedPropertyPath.Trim();
+                var prop = FindSerializedPropertyCompat(so, requestedPath, out var resolvedPath);
                 if (prop == null)
                     return SceneOperationResult.Fail($"找不到 SerializedProperty: {serializedPropertyPath}");
 
@@ -530,12 +531,59 @@ namespace UnityMCP.Tools
                     return SceneOperationResult.Fail(assign.Error ?? "属性赋值失败");
 
                 so.ApplyModifiedProperties();
+                if (!string.Equals(resolvedPath, requestedPath, StringComparison.Ordinal))
+                    Debug.Log($"[UnityMCP] setComponentProperty 已兼容路径：\"{requestedPath}\" -> \"{resolvedPath}\"");
                 return SceneOperationResult.Ok(go);
             }
             catch (Exception ex)
             {
                 return SceneOperationResult.Fail($"设置组件属性失败: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 兼容常见的 SerializedProperty 路径差异（例如 m_X / m_Y 与 x / y）。
+        /// </summary>
+        private static SerializedProperty? FindSerializedPropertyCompat(
+            SerializedObject so,
+            string requestedPath,
+            out string resolvedPath)
+        {
+            resolvedPath = requestedPath;
+            var prop = so.FindProperty(requestedPath);
+            if (prop != null) return prop;
+
+            var candidate1 = requestedPath
+                .Replace(".m_X", ".x", StringComparison.OrdinalIgnoreCase)
+                .Replace(".m_Y", ".y", StringComparison.OrdinalIgnoreCase)
+                .Replace(".m_Z", ".z", StringComparison.OrdinalIgnoreCase)
+                .Replace(".m_W", ".w", StringComparison.OrdinalIgnoreCase);
+            if (!string.Equals(candidate1, requestedPath, StringComparison.Ordinal))
+            {
+                prop = so.FindProperty(candidate1);
+                if (prop != null)
+                {
+                    resolvedPath = candidate1;
+                    return prop;
+                }
+            }
+
+            var candidate2 = requestedPath
+                .Replace(".x", ".m_X", StringComparison.OrdinalIgnoreCase)
+                .Replace(".y", ".m_Y", StringComparison.OrdinalIgnoreCase)
+                .Replace(".z", ".m_Z", StringComparison.OrdinalIgnoreCase)
+                .Replace(".w", ".m_W", StringComparison.OrdinalIgnoreCase);
+            if (!string.Equals(candidate2, requestedPath, StringComparison.Ordinal))
+            {
+                prop = so.FindProperty(candidate2);
+                if (prop != null)
+                {
+                    resolvedPath = candidate2;
+                    return prop;
+                }
+            }
+
+            return null;
         }
 
         public static SceneOperationResult SetRectTransformByHierarchyPath(
