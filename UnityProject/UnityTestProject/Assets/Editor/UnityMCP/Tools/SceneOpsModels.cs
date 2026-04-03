@@ -48,8 +48,11 @@ namespace UnityMCP.Tools
         /// <summary>instantiatePrefab：Assets 下 .prefab 路径</summary>
         public string prefabAssetPath = "";
 
-        /// <summary>addComponent：组件类型短名或全名</summary>
+        /// <summary>addComponent / setComponentProperty：组件类型短名或全名（推荐）。</summary>
         public string typeName = "";
+
+        /// <summary>addComponent / setComponentProperty：组件类型别名（兼容旧版客户端使用 componentType）。</summary>
+        public string componentType = "";
 
         /// <summary>setParent：是否保持世界坐标（默认 false）</summary>
         public bool worldPositionStays;
@@ -85,6 +88,9 @@ namespace UnityMCP.Tools
         /// <summary>setComponentProperty：SerializedProperty 路径（如 m_Color、fontSize）。</summary>
         public string serializedPropertyPath = "";
 
+        /// <summary>setComponentProperty：属性路径别名（兼容旧版客户端使用 propertyName）。</summary>
+        public string propertyName = "";
+
         /// <summary>setComponentProperty：属性值字符串（按类型解析）。</summary>
         public string propertyValue = "";
 
@@ -108,6 +114,22 @@ namespace UnityMCP.Tools
 
         /// <summary>setSiblingIndex：目标物体在其父节点子列表中的新排序索引（0 = 最前面）。</summary>
         public int siblingIndex = 0;
+
+        // ──────────────────────────────────────────────
+        //  别名归一化：优先使用新字段，回退到旧字段。
+        // ──────────────────────────────────────────────
+
+        /// <summary>
+        /// 获取组件类型名：优先 typeName，为空时回退到 componentType。
+        /// </summary>
+        public string ResolvedTypeName
+            => !string.IsNullOrWhiteSpace(typeName) ? typeName : componentType;
+
+        /// <summary>
+        /// 获取序列化属性路径：优先 serializedPropertyPath，为空时回退到 propertyName。
+        /// </summary>
+        public string ResolvedPropertyPath
+            => !string.IsNullOrWhiteSpace(serializedPropertyPath) ? serializedPropertyPath : propertyName;
     }
 
     /// <summary>解析 <see cref="SceneOpsEnvelopeDto"/> 的结果</summary>

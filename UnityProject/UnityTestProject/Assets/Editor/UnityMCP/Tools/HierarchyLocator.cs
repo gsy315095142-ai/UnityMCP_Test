@@ -66,7 +66,8 @@ namespace UnityMCP.Tools
             if (!scene.IsValid() || string.IsNullOrWhiteSpace(hierarchyPath))
                 return null;
 
-            var parts = hierarchyPath.Trim().Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            var normalized = hierarchyPath.Trim();
+            var parts = normalized.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length == 0)
                 return null;
 
@@ -81,7 +82,7 @@ namespace UnityMCP.Tools
             }
 
             if (current == null)
-                return null;
+                return TryFindByShortNameFallback(scene, normalized);
 
             var t = current.transform;
             for (var i = 1; i < parts.Length; i++)
@@ -98,11 +99,27 @@ namespace UnityMCP.Tools
                 }
 
                 if (next == null)
-                    return null;
+                    return TryFindByShortNameFallback(scene, normalized);
                 t = next;
             }
 
             return t.gameObject;
+        }
+
+        /// <summary>
+        /// 路径匹配失败时的兜底：仅当输入不含 "/" 时，按短名匹配。
+        /// </summary>
+        private static GameObject? TryFindByShortNameFallback(Scene scene, string normalizedInput)
+        {
+            if (normalizedInput.IndexOf('/') >= 0)
+                return null;
+
+            // 用户要求的 fallback：尝试 GameObject.Find(name)。
+            var byName = GameObject.Find(normalizedInput);
+            if (byName != null && byName.scene == scene)
+                return byName;
+
+            return null;
         }
 
         /// <summary>

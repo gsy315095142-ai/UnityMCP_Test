@@ -127,7 +127,8 @@ namespace UnityMCP.Tools
 
             var child = HierarchyLocator.FindByHierarchyPath(scene, op.path.Trim());
             if (child == null)
-                return SceneOperationResult.Fail($"未找到物体: {op.path}");
+                return SceneOperationResult.Fail(
+                    $"未找到物体: {op.path}。请优先使用完整层级路径（例如 Canvas/LoginPanel/UsernameInput）；短名仅作兜底匹配，重名时可能不确定。");
 
             var pr = HierarchyLocator.TryResolveParent(op.newParentPath.Trim(), scene, out var parent);
             if (!pr.Success)
@@ -142,10 +143,10 @@ namespace UnityMCP.Tools
         {
             if (string.IsNullOrWhiteSpace(op.path))
                 return SceneOperationResult.Fail("addComponent 需要 path");
-            if (string.IsNullOrWhiteSpace(op.typeName))
-                return SceneOperationResult.Fail("addComponent 需要 typeName");
+            if (string.IsNullOrWhiteSpace(op.ResolvedTypeName))
+                return SceneOperationResult.Fail("addComponent 需要 typeName（或 componentType）");
 
-            return SceneEditorTools.AddComponentByHierarchyPath(op.path.Trim(), op.typeName.Trim());
+            return SceneEditorTools.AddComponentByHierarchyPath(op.path.Trim(), op.ResolvedTypeName.Trim());
         }
 
         private static SceneOperationResult ExecSetTransform(SceneOperationDto op)
@@ -258,10 +259,15 @@ namespace UnityMCP.Tools
         {
             if (string.IsNullOrWhiteSpace(op.path))
                 return SceneOperationResult.Fail("setComponentProperty 需要 path");
+            if (string.IsNullOrWhiteSpace(op.ResolvedTypeName))
+                return SceneOperationResult.Fail("setComponentProperty 需要 typeName（或 componentType）");
+            if (string.IsNullOrWhiteSpace(op.ResolvedPropertyPath))
+                return SceneOperationResult.Fail("setComponentProperty 需要 serializedPropertyPath（或 propertyName）");
+
             return SceneEditorTools.SetComponentPropertyByHierarchyPath(
                 op.path.Trim(),
-                op.typeName ?? "",
-                op.serializedPropertyPath ?? "",
+                op.ResolvedTypeName.Trim(),
+                op.ResolvedPropertyPath.Trim(),
                 op.propertyValue ?? "");
         }
 

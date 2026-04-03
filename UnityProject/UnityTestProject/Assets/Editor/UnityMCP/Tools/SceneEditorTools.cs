@@ -4,6 +4,8 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -15,13 +17,13 @@ namespace UnityMCP.Tools
 {
     /// <summary>
     /// Unity 场景与层级原子操作（A.1），不依赖 AI。
-    /// 所有方法应在主线程调用；若从未知线程调用请使用 <see cref="RunOnMainThread{T}"/>。
+    /// 所有方法应在主线程调用；若从未知线程调用请使用 <see cref="RunOnMainThread{T}" />。
     /// 成功路径尽量注册 Undo，便于 Ctrl+Z。
     /// </summary>
     public static class SceneEditorTools
     {
         /// <summary>
-        /// 若当前不在主线程，将 <paramref name="func"/> 投递到主线程执行；否则直接执行。
+        /// 若当前不在主线程，将 <paramref name="func" /> 投递到主线程执行；否则直接执行。
         /// </summary>
         public static SceneOperationResult RunOnMainThread(Func<SceneOperationResult> func)
         {
@@ -92,8 +94,8 @@ namespace UnityMCP.Tools
         }
 
         /// <summary>
-        /// 按层级路径创建空物体：<paramref name="parentPath"/> 为空则挂场景根；
-        /// 为 <see cref="HierarchyLocator.ParentUsesSelection"/> 时用当前选中物体为父。
+        /// 按层级路径创建空物体：<paramref name="parentPath" /> 为空则挂场景根；
+        /// 为 <see cref="HierarchyLocator.ParentUsesSelection" /> 时用当前选中物体为父。
         /// </summary>
         public static SceneOperationResult CreateEmptyGameObjectAt(string name, string? parentPath)
         {
@@ -146,7 +148,7 @@ namespace UnityMCP.Tools
         }
 
         /// <summary>
-        /// 设置子物体的父节点（本地坐标保持不变由 <paramref name="worldPositionStays"/> 控制，默认 false 与编辑器默认一致）。
+        /// 设置子物体的父节点（本地坐标保持不变由 <paramref name="worldPositionStays" /> 控制，默认 false 与编辑器默认一致）。
         /// </summary>
         public static SceneOperationResult SetParent(GameObject child, GameObject newParent, bool worldPositionStays = false)
         {
@@ -216,7 +218,7 @@ namespace UnityMCP.Tools
         }
 
         /// <summary>
-        /// 按路径解析父节点并实例化预制体（父路径规则同 <see cref="CreateEmptyGameObjectAt"/>）。
+        /// 按路径解析父节点并实例化预制体（父路径规则同 <see cref="CreateEmptyGameObjectAt" />）。
         /// </summary>
         public static SceneOperationResult InstantiatePrefabAtPath(
             string prefabAssetPath,
@@ -237,7 +239,7 @@ namespace UnityMCP.Tools
         }
 
         /// <summary>
-        /// 为物体添加组件（无额外属性）。使用 <see cref="Undo.AddComponent"/> 以支持撤销。
+        /// 为物体添加组件（无额外属性）。使用 <see cref="Undo.AddComponent" /> 以支持撤销。
         /// </summary>
         public static SceneOperationResult AddComponentToGameObject(GameObject go, string typeName)
         {
@@ -306,7 +308,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
             return AddComponentToGameObject(go, typeName);
         }
 
@@ -340,7 +342,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
             return SetTransformLocal(go, localPosition, localEulerAngles, localScale);
         }
 
@@ -360,7 +362,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
             Undo.DestroyObjectImmediate(go);
             return SceneOperationResult.Ok(go);
         }
@@ -369,7 +371,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
 
             Undo.IncrementCurrentGroup();
             var group = Undo.GetCurrentGroup();
@@ -399,7 +401,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
             Undo.RecordObject(go, "SetActive");
             go.SetActive(active);
             return SceneOperationResult.Ok(go);
@@ -412,7 +414,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
 
             var parent = go.transform.parent;
             if (parent == null)
@@ -454,7 +456,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
             if (string.IsNullOrWhiteSpace(tagName))
                 return SceneOperationResult.Fail("gameObjectTag 为空。");
 
@@ -526,7 +528,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
             if (string.IsNullOrWhiteSpace(componentTypeName))
                 return SceneOperationResult.Fail("setComponentProperty 需要 typeName（组件类型）。");
             if (string.IsNullOrWhiteSpace(serializedPropertyPath))
@@ -540,6 +542,13 @@ namespace UnityMCP.Tools
             if (comp == null)
                 return SceneOperationResult.Fail($"物体上未找到组件: {type.Name}");
 
+            // 兼容：一些外部调用会以 typeName=Canvas 来设置 RectTransform 的 localScale。
+            // 该属性并不属于 Canvas 组件本身，走 SerializedObject(Canvas) 通道会不生效。
+            // 对此做显式分流，直接写入 RectTransform。
+            if (TrySetCanvasRectTransformScaleByPropertyPath(
+                    go, comp, serializedPropertyPath, propertyValue ?? "", out var directScaleResult))
+                return directScaleResult;
+
             try
             {
                 using var so = new SerializedObject(comp);
@@ -552,7 +561,34 @@ namespace UnityMCP.Tools
                 if (!assign.Success)
                     return SceneOperationResult.Fail(assign.Error ?? "属性赋值失败");
 
+                var shouldGuardCanvasScale = IsCanvasRenderModeProperty(comp, requestedPath, resolvedPath);
+                var rt = shouldGuardCanvasScale ? go.GetComponent<RectTransform>() : null;
+                var oldScale = rt != null ? rt.localScale : Vector3.one;
+                var beforeSnap = shouldGuardCanvasScale ? BuildCanvasRenderModeDebugSnapshot(go, comp, resolvedPath, "before") : "";
+
                 so.ApplyModifiedProperties();
+                var afterSnap = shouldGuardCanvasScale ? BuildCanvasRenderModeDebugSnapshot(go, comp, resolvedPath, "after") : "";
+
+                // Bug guard:
+                // 某些情况下修改 Canvas RenderMode 后会意外把 RectTransform.localScale 置为 (0,0,0)。
+                // 这里做最小保护：若应用前是非零，应用后变全零，则恢复旧值。
+                if (rt != null &&
+                    !IsNearZero(oldScale) &&
+                    IsNearZero(rt.localScale))
+                {
+                    Undo.RecordObject(rt, "Restore RectTransform Scale After RenderMode");
+                    rt.localScale = oldScale;
+                    Debug.LogWarning(
+                        $"[UnityMCP] 检测到 Canvas RenderMode 修改后 localScale 被意外重置为 0，已自动恢复。路径：\"{hierarchyPath}\"，属性：\"{resolvedPath}\"");
+                    Debug.LogWarning("[UnityMCP] CanvasRenderMode snapshot\n" + beforeSnap + "\n" + afterSnap + "\n" +
+                                     BuildCanvasRenderModeDebugSnapshot(go, comp, resolvedPath, "after-restore"));
+                }
+                else if (shouldGuardCanvasScale)
+                {
+                    // 常规记录：保留 RenderMode 前后关键字段，便于排查异常写入来源。
+                    Debug.Log("[UnityMCP] CanvasRenderMode snapshot\n" + beforeSnap + "\n" + afterSnap);
+                }
+
                 if (!string.Equals(resolvedPath, requestedPath, StringComparison.Ordinal))
                     Debug.Log($"[UnityMCP] setComponentProperty 已兼容路径：\"{requestedPath}\" -> \"{resolvedPath}\"");
                 return SceneOperationResult.Ok(go);
@@ -561,6 +597,97 @@ namespace UnityMCP.Tools
             {
                 return SceneOperationResult.Fail($"设置组件属性失败: {ex.Message}");
             }
+        }
+
+        private static bool TrySetCanvasRectTransformScaleByPropertyPath(
+            GameObject go,
+            Component comp,
+            string serializedPropertyPath,
+            string propertyValue,
+            out SceneOperationResult result)
+        {
+            result = SceneOperationResult.Fail("unhandled");
+            if (!(comp is Canvas))
+                return false;
+
+            var p = (serializedPropertyPath ?? "").Trim();
+            if (!IsRectTransformScalePath(p))
+                return false;
+
+            var rt = go.GetComponent<RectTransform>();
+            if (rt == null)
+            {
+                result = SceneOperationResult.Fail("Canvas 对象缺少 RectTransform，无法设置 localScale。");
+                return true;
+            }
+
+            var scale = rt.localScale;
+            if (IsScaleWholePath(p))
+            {
+                var v3 = SceneOpsVectorParser.TryParseVector3(propertyValue ?? "");
+                if (v3 == null)
+                {
+                    result = SceneOperationResult.Fail($"localScale 需要 Vector3 格式（如 \"1,1,1\"），当前: {propertyValue}");
+                    return true;
+                }
+                scale = v3.Value;
+            }
+            else
+            {
+                var axis = GetScaleAxisFromPath(p);
+                if (axis < 0)
+                {
+                    result = SceneOperationResult.Fail($"无法识别 localScale 分量路径: {serializedPropertyPath}");
+                    return true;
+                }
+                if (!float.TryParse((propertyValue ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var f))
+                {
+                    result = SceneOperationResult.Fail($"localScale 分量需要浮点数，当前: {propertyValue}");
+                    return true;
+                }
+
+                switch (axis)
+                {
+                    case 0: scale.x = f; break;
+                    case 1: scale.y = f; break;
+                    case 2: scale.z = f; break;
+                }
+            }
+
+            Undo.RecordObject(rt, "Set RectTransform.localScale");
+            rt.localScale = scale;
+            result = SceneOperationResult.Ok(go);
+            return true;
+        }
+
+        private static bool IsRectTransformScalePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            return IsScaleWholePath(path) ||
+                   path.EndsWith(".x", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".y", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".z", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".m_X", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".m_Y", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".m_Z", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsScaleWholePath(string path) =>
+            string.Equals(path, "m_LocalScale", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path, "localScale", StringComparison.OrdinalIgnoreCase);
+
+        private static int GetScaleAxisFromPath(string path)
+        {
+            if (path.EndsWith(".x", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".m_X", StringComparison.OrdinalIgnoreCase))
+                return 0;
+            if (path.EndsWith(".y", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".m_Y", StringComparison.OrdinalIgnoreCase))
+                return 1;
+            if (path.EndsWith(".z", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".m_Z", StringComparison.OrdinalIgnoreCase))
+                return 2;
+            return -1;
         }
 
         /// <summary>
@@ -605,8 +732,143 @@ namespace UnityMCP.Tools
                 }
             }
 
+            // 兜底：大小写不敏感匹配（Unity FindProperty 区分大小写）。
+            prop = FindPropertyIgnoreCase(so, requestedPath, out var foundPath);
+            if (prop != null)
+            {
+                resolvedPath = foundPath;
+                return prop;
+            }
+
+            if (!string.Equals(candidate1, requestedPath, StringComparison.Ordinal))
+            {
+                prop = FindPropertyIgnoreCase(so, candidate1, out foundPath);
+                if (prop != null)
+                {
+                    resolvedPath = foundPath;
+                    return prop;
+                }
+            }
+
+            if (!string.Equals(candidate2, requestedPath, StringComparison.Ordinal))
+            {
+                prop = FindPropertyIgnoreCase(so, candidate2, out foundPath);
+                if (prop != null)
+                {
+                    resolvedPath = foundPath;
+                    return prop;
+                }
+            }
+
             return null;
         }
+
+        private static SerializedProperty? FindPropertyIgnoreCase(
+            SerializedObject so,
+            string targetPath,
+            out string foundPath)
+        {
+            foundPath = targetPath;
+            if (string.IsNullOrWhiteSpace(targetPath))
+                return null;
+
+            var it = so.GetIterator();
+            if (!it.NextVisible(true))
+                return null;
+
+            do
+            {
+                if (string.Equals(it.propertyPath, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    foundPath = it.propertyPath;
+                    return it.Copy();
+                }
+            } while (it.NextVisible(false));
+
+            return null;
+        }
+
+        private static bool IsCanvasRenderModeProperty(Component comp, string requestedPath, string resolvedPath)
+        {
+            if (comp == null) return false;
+            if (!(comp is Canvas)) return false;
+            return IsRenderModePath(requestedPath) || IsRenderModePath(resolvedPath);
+        }
+
+        private static bool IsRenderModePath(string path) =>
+            string.Equals(path?.Trim(), "m_RenderMode", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(path?.Trim(), "renderMode", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsNearZero(Vector3 v)
+        {
+            const float eps = 1e-6f;
+            return Mathf.Abs(v.x) < eps && Mathf.Abs(v.y) < eps && Mathf.Abs(v.z) < eps;
+        }
+
+        private static string BuildCanvasRenderModeDebugSnapshot(
+            GameObject go,
+            Component comp,
+            string propertyPath,
+            string phase)
+        {
+            var sb = new StringBuilder();
+            sb.Append("[");
+            sb.Append(phase);
+            sb.Append("] path=");
+            sb.Append(go != null ? go.name : "(null)");
+            sb.Append(" property=");
+            sb.Append(propertyPath);
+
+            var canvas = comp as Canvas ?? go.GetComponent<Canvas>();
+            if (canvas != null)
+            {
+                sb.Append(" | Canvas(renderMode=");
+                sb.Append(canvas.renderMode);
+                sb.Append(", worldCamera=");
+                sb.Append(canvas.worldCamera != null ? canvas.worldCamera.name : "null");
+                sb.Append(", planeDistance=");
+                sb.Append(canvas.planeDistance.ToString("0.###", CultureInfo.InvariantCulture));
+                sb.Append(")");
+            }
+
+            var rt = go.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                sb.Append(" | RectTransform(scale=");
+                sb.Append(FmtV3(rt.localScale));
+                sb.Append(", anchoredPos=");
+                sb.Append(Fmt(rt.anchoredPosition));
+                sb.Append(", sizeDelta=");
+                sb.Append(Fmt(rt.sizeDelta));
+                sb.Append(", anchorMin=");
+                sb.Append(Fmt(rt.anchorMin));
+                sb.Append(", anchorMax=");
+                sb.Append(Fmt(rt.anchorMax));
+                sb.Append(")");
+            }
+
+            var scaler = go.GetComponent<CanvasScaler>();
+            if (scaler != null)
+            {
+                sb.Append(" | CanvasScaler(uiScaleMode=");
+                sb.Append(scaler.uiScaleMode);
+                sb.Append(", refRes=");
+                sb.Append(Fmt(scaler.referenceResolution));
+                sb.Append(", match=");
+                sb.Append(scaler.matchWidthOrHeight.ToString("0.###", CultureInfo.InvariantCulture));
+                sb.Append(", scaleFactor=");
+                sb.Append(scaler.scaleFactor.ToString("0.###", CultureInfo.InvariantCulture));
+                sb.Append(")");
+            }
+
+            return sb.ToString();
+        }
+
+        private static string FmtV3(Vector3 v) =>
+            $"{v.x.ToString("0.###", CultureInfo.InvariantCulture)},{v.y.ToString("0.###", CultureInfo.InvariantCulture)},{v.z.ToString("0.###", CultureInfo.InvariantCulture)}";
+
+        private static string Fmt(Vector2 v) =>
+            $"{v.x.ToString("0.###", CultureInfo.InvariantCulture)},{v.y.ToString("0.###", CultureInfo.InvariantCulture)}";
 
         public static SceneOperationResult SetRectTransformByHierarchyPath(
             string hierarchyPath,
@@ -620,7 +882,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
 
             var rt = go.GetComponent<RectTransform>();
             if (rt == null)
@@ -647,7 +909,7 @@ namespace UnityMCP.Tools
         {
             var go = HierarchyLocator.FindByHierarchyPath(hierarchyPath);
             if (go == null)
-                return SceneOperationResult.Fail($"未找到物体: \"{hierarchyPath}\"");
+                return SceneOperationResult.Fail(BuildHierarchyPathNotFoundMessage(hierarchyPath));
 
             var uiText = go.GetComponent<Text>();
             if (uiText != null)
@@ -675,6 +937,22 @@ namespace UnityMCP.Tools
             }
 
             return SceneOperationResult.Fail("物体上未找到 UnityEngine.UI.Text 或 TMPro.TMP_Text/TextMeshProUGUI。");
+        }
+
+        /// <summary>
+        /// 将字符串标准化为仅保留字母和数字的形式，用于枚举名称模糊匹配。
+        /// 例如："Screen Space - Overlay" → "ScreenSpaceOverlay"
+        /// </summary>
+        private static string NormalizeEnumName(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return raw;
+            var sb = new StringBuilder(raw.Length);
+            foreach (char c in raw)
+            {
+                if (char.IsLetterOrDigit(c))
+                    sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         private static (bool Success, string? Error) TryAssignSerializedProperty(SerializedProperty prop, string raw)
@@ -706,13 +984,10 @@ namespace UnityMCP.Tools
                     case SerializedPropertyType.Enum:
                         if (string.IsNullOrEmpty(v))
                             return (false, "propertyValue 为空。");
-                        if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ei))
-                        {
-                            prop.enumValueIndex = ei;
-                            return (true, null);
-                        }
 
                         var names = prop.enumNames;
+
+                        // 1. 先尝试精确匹配枚举原始名称（大小写不敏感）
                         for (var n = 0; n < names.Length; n++)
                         {
                             if (string.Equals(names[n], v, StringComparison.OrdinalIgnoreCase))
@@ -722,7 +997,40 @@ namespace UnityMCP.Tools
                             }
                         }
 
-                        return (false, $"枚举中无名称: {v}");
+                        // 2. 尝试整数索引（带边界检查）
+                        if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ei))
+                        {
+                            if (ei >= 0 && ei < names.Length)
+                            {
+                                prop.enumValueIndex = ei;
+                                return (true, null);
+                            }
+                            return (false, $"枚举索引超出范围: {ei}（有效范围 0~{names.Length - 1}，可选值: {string.Join(", ", names)}）");
+                        }
+
+                        // 3. 模糊匹配：去除空格、连字符等特殊字符后比较
+                        var normalizedInput = NormalizeEnumName(v);
+                        for (var n = 0; n < names.Length; n++)
+                        {
+                            if (string.Equals(NormalizeEnumName(names[n]), normalizedInput, StringComparison.OrdinalIgnoreCase))
+                            {
+                                prop.enumValueIndex = n;
+                                return (true, null);
+                            }
+                        }
+
+                        // 4. 提示可用值
+                        var displayNames = prop.enumDisplayNames;
+                        var hint = new StringBuilder("可选值: ");
+                        for (var n = 0; n < names.Length; n++)
+                        {
+                            if (n > 0) hint.Append(", ");
+                            hint.Append($"{names[n]}");
+                            if (displayNames != null && displayNames.Length > n && !string.Equals(displayNames[n], names[n]))
+                                hint.Append($"（显示名: {displayNames[n]}）");
+                        }
+                        return (false, $"枚举中无名称: {v}。{hint}");
+
                     case SerializedPropertyType.Color:
                         var c = ParseColor(v);
                         if (c == null) return (false, $"无法解析颜色: {v}");
@@ -835,6 +1143,10 @@ namespace UnityMCP.Tools
 
             return null;
         }
+
+        private static string BuildHierarchyPathNotFoundMessage(string hierarchyPath) =>
+            $"未找到物体: \"{hierarchyPath}\"。请优先使用完整层级路径（例如 \"Canvas/LoginPanel/UsernameInput\"）；" +
+            "短名仅作为兜底匹配，可能因重名导致命中不确定。";
 
     }
 }

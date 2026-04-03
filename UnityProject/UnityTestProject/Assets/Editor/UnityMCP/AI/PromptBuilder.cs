@@ -862,7 +862,7 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
 
         /// <summary>
         /// 把当前活动场景的 Hierarchy 树（最多 maxDepth 层、maxNodes 个节点）转为可读文本，
-        /// 附带每个节点的**完整层级路径**，供 AI 直接引用，不再猜测。
+        /// 附带每个节点的**完整层级路径**与关键组件快照，供 AI 直接引用与回读校验，不再猜测。
         /// </summary>
         /// <summary>供 MCP 工具执行器直接调用，获取场景层级文本。</summary>
         public static string BuildSceneHierarchyDump(int maxDepth = 6, int maxNodes = 300)
@@ -872,8 +872,8 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
                 return "## 当前场景 Hierarchy\n（场景无效，无法获取 Hierarchy）";
 
             var sb = new StringBuilder();
-            sb.AppendLine("## 当前场景 Hierarchy（真实路径列表，op 的 path/parentPath 必须从此选取或拼接）");
-            sb.AppendLine("格式：`缩进树形` → 每行括号内为**可直接填入 path 字段的完整层级路径**");
+            sb.AppendLine("## 当前场景 Hierarchy（真实路径 + 关键组件快照）");
+            sb.AppendLine("格式：`缩进树形` → 每行括号内是完整 path；下一行 `·` 为关键组件与属性摘要（用于验证是否生效）");
 
             var count = 0;
             foreach (var root in scene.GetRootGameObjects())
@@ -902,6 +902,7 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
             if (count >= maxNodes) return;
             count++;
             sb.AppendLine($"{indent}- {t.name}  (`{fullPath}`)");
+            AppendComponentSnapshot(sb, t, indent);
 
             if (maxDepth <= 1) return;
             for (var i = 0; i < t.childCount; i++)
@@ -910,6 +911,178 @@ codeType（当 generationTarget 为 ""prefab"" 时也请给出，可固定为 ""
                 var child = t.GetChild(i);
                 DumpGameObject(sb, child, indent + "  ", fullPath + "/" + child.name, maxDepth - 1, maxNodes, ref count);
             }
+        }
+
+        private static void AppendComponentSnapshot(StringBuilder sb, Transform t, string indent)
+        {
+            var parts = BuildComponentSnapshotParts(t);
+            if (parts.Count == 0) return;
+            sb.AppendLine($"{indent}  · {string.Join(" | ", parts)}");
+        }
+
+        private static List<string> BuildComponentSnapshotParts(Transform t)
+        {
+            var parts = new List<string>();
+            var go = t.gameObject;
+            var comps = go.GetComponents<Component>();
+            if (comps == null || comps.Length == 0) return parts;
+
+            // 1) 组件列表（排除基础 Transform）
+            var compNames = comps
+                .Where(c => c != null)
+                .Select(c => c!.GetType().Name)
+                .Where(n => !string.Equals(n, nameof(Transform), StringComparison.Ordinal))
+                .Distinct()
+                .ToList();
+            if (compNames.Count > 0)
+                parts.Add("组件:" + string.Join(",", compNames));
+
+            // 2) RectTransform 关键布局属性
+            if (go.transform is RectTransform rt)
+            {
+                parts.Add(
+                    $"RectTransform(anchorMin={Fmt(rt.anchorMin)},anchorMax={Fmt(rt.anchorMax)},anchoredPos={Fmt(rt.anchoredPosition)},sizeDelta={Fmt(rt.sizeDelta)},pivot={Fmt(rt.pivot)})");
+            }
+
+            // 3) Canvas（RenderMode）
+            var canvas = FindComponentByName(comps, "Canvas");
+            if (canvas != null)
+            {
+                var renderMode = ReadPropertyValue(canvas, "renderMode");
+                if (!string.IsNullOrEmpty(renderMode))
+                    parts.Add($"Canvas(renderMode={renderMode})");
+            }
+
+            // 4) Image / RawImage（Source Image / Texture）
+            var image = FindComponentByName(comps, "Image");
+            if (image != null)
+            {
+                var spriteObj = ReadObjectProperty(image, "sprite");
+                var spritePath = ToAssetPath(spriteObj);
+                parts.Add($"Image(source={(string.IsNullOrEmpty(spritePath) ? "null" : spritePath)})");
+            }
+            var rawImage = FindComponentByName(comps, "RawImage");
+            if (rawImage != null)
+            {
+                var texObj = ReadObjectProperty(rawImage, "texture");
+                var texPath = ToAssetPath(texObj);
+                parts.Add($"RawImage(texture={(string.IsNullOrEmpty(texPath) ? "null" : texPath)})");
+            }
+
+            // 5) Text / TMP_Text（文本内容）
+            var uiText = FindComponentByName(comps, "Text");
+            if (uiText != null)
+            {
+                var text = ReadPropertyValue(uiText, "text");
+                parts.Add($"Text(text={QuoteShort(text, 36)})");
+            }
+
+            var tmpText = FindComponentByName(comps, "TMP_Text", "TextMeshProUGUI", "TextMeshPro");
+            if (tmpText != null)
+            {
+                var text = ReadPropertyValue(tmpText, "text");
+                parts.Add($"TMP_Text(text={QuoteShort(text, 36)})");
+            }
+
+            // 6) 交互组件状态
+            var input = FindComponentByName(comps, "InputField");
+            if (input != null)
+            {
+                var text = ReadPropertyValue(input, "text");
+                parts.Add($"InputField(text={QuoteShort(text, 24)})");
+            }
+
+            var tmpInput = FindComponentByName(comps, "TMP_InputField");
+            if (tmpInput != null)
+            {
+                var text = ReadPropertyValue(tmpInput, "text");
+                parts.Add($"TMP_InputField(text={QuoteShort(text, 24)})");
+            }
+
+            var button = FindComponentByName(comps, "Button");
+            if (button != null)
+            {
+                var interactable = ReadPropertyValue(button, "interactable");
+                parts.Add($"Button(interactable={interactable})");
+            }
+
+            var toggle = FindComponentByName(comps, "Toggle");
+            if (toggle != null)
+            {
+                var isOn = ReadPropertyValue(toggle, "isOn");
+                parts.Add($"Toggle(isOn={isOn})");
+            }
+
+            return parts;
+        }
+
+        private static Component? FindComponentByName(Component[] comps, params string[] names)
+        {
+            foreach (var c in comps)
+            {
+                if (c == null) continue;
+                var t = c.GetType();
+                foreach (var n in names)
+                {
+                    if (string.Equals(t.Name, n, StringComparison.Ordinal) ||
+                        string.Equals(t.FullName, n, StringComparison.Ordinal) ||
+                        t.FullName?.EndsWith("." + n, StringComparison.Ordinal) == true)
+                        return c;
+                }
+            }
+            return null;
+        }
+
+        private static string ReadPropertyValue(Component comp, string propertyName)
+        {
+            try
+            {
+                var p = comp.GetType().GetProperty(propertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                var v = p?.GetValue(comp, null);
+                return v?.ToString() ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static UnityEngine.Object? ReadObjectProperty(Component comp, string propertyName)
+        {
+            try
+            {
+                var p = comp.GetType().GetProperty(propertyName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                var v = p?.GetValue(comp, null);
+                return v as UnityEngine.Object;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string ToAssetPath(UnityEngine.Object? obj)
+        {
+            if (obj == null) return "";
+            try
+            {
+                return AssetDatabase.GetAssetPath(obj) ?? "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string Fmt(Vector2 v) =>
+            $"{v.x.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)},{v.y.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}";
+
+        private static string QuoteShort(string? value, int maxLen)
+        {
+            var s = value ?? "";
+            if (s.Length > maxLen) s = s.Substring(0, maxLen) + "...";
+            s = s.Replace("\n", "\\n").Replace("\r", "");
+            return $"\"{s}\"";
         }
 
         /// <summary>
